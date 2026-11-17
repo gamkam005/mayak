@@ -1,0 +1,16 @@
+1) DNS через mapdns (uid box → tun0 → hev):
+   blocked.example -> 100.64.0.0 (фейковый адрес из 100.64/10)
+2) HTTPS по имени (fake IP → hev → SOCKS по имени → ядро → напрямую):
+   код 200, 0.046606 с
+3) HTTPS по IP 10.0.2.2 (без DNS):
+   код 200, 0.004126 с
+4) UDP мимо mapdns (SOCKS UDP у ядра нет — должно тихо не пройти, ядро живо):
+   нет ответа (ожидаемо): TimeoutError
+   после UDP: HTTPS код 200
+5) что видел «DPI» на входе маршрутизатора (сегменты вверх с ClientHello):
+    157 B ttl 127 запись 160301009e SNI не целиком
+    1551 B ttl 127 запись 160301060a SNI не целиком
+    157 B ttl 127 запись 160301009e SNI не целиком
+6) журнал маршрутизатора ядра:
+    {'mode': 'direct', 'direct': 3, 'failed': 0} [('blocked.example', 'direct', 'tlsrec+split')]
+hev log:

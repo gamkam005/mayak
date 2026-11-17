@@ -1,0 +1,13 @@
+config mayak 'main'
+	# 1 — запускать при загрузке
+	option enabled '0'
+	# ссылка mayak://… от сервера
+	option link ''
+	# локальный SOCKS5/HTTP-прокси для podkop (не открывайте наружу)
+	option listen '127.0.0.1:1080'
+	# панель; если 9090 занят (Clash API / podkop), оставьте 9091; '' — выключить
+	option ui '0.0.0.0:9091'
+	# auto | mosaic | fast
+	option mode 'auto'
+	# байт на одно TLS-соединение в режиме mosaic
+	option budget '14000'

@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+# МАЯК — клиент мозаичного туннеля для OpenWrt (procd)
+START=95
+STOP=10
+USE_PROCD=1
+PROG=/usr/bin/mayak
+
+start_service() {
+	config_load mayak
+	local enabled link listen ui mode budget
+	config_get_bool enabled main enabled 0
+	config_get link main link ''
+	config_get listen main listen '127.0.0.1:1080'
+	config_get ui main ui '0.0.0.0:9091'
+	config_get mode main mode 'auto'
+	config_get budget main budget '14000'
+	[ "$enabled" = 1 ] || return 0
+	[ -n "$link" ] || { logger -t mayak "нет ссылки: uci set mayak.main.link='mayak://...'"; return 1; }
+	procd_open_instance
+	procd_set_param command "$PROG" client -link "$link" -listen "$listen" -ui "$ui" -mode "$mode" -budget "$budget" -open=false
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param limits nofile="16384 16384"
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "mayak"
+}

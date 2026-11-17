@@ -1,0 +1,11 @@
+стратегия     curl           что видит DPI (вход rtr): сегменты вверх что получил сервер
+none                   200/0.005201s  1575B ttl127 SNI rec0622 | 181B ttl127 | 24B ttl127 rec0013  1575B ttl126 SNI rec0622 | 181B ttl126 | 24B ttl126 rec0013
+tlsrec+split           200/0.004420s  157B ttl127 rec009e | 1423B ttl127 | 80B ttl127 | 101B ttl127 rec0060 157B ttl126 rec009e | 1423B ttl126 | 80B ttl126 | 101B ttl126 rec0060
+tlsrec+disorder        200/0.005160s  157B ttl1 rec009e | 1423B ttl127 | 157B ttl127 rec009e | 181B ttl127 1423B ttl126 | 157B ttl126 rec009e | 181B ttl126 | 24B ttl126 rec0013
+tlsrec+fake:ttl=1      200/0.019639s  176B ttl1 FAKE rec009e | 1404B ttl127 | 176B ttl127 rec009e | 181B ttl127 1404B ttl126 | 176B ttl126 rec009e | 181B ttl126 | 24B ttl126 rec0013
+fake:ttl=64            000/0.019464s  171B ttl64 FAKE rec0622 | 1404B ttl127 | 7B ttl127           171B ttl63 FAKE rec0622 | 1404B ttl126 | 7B ttl126
+fake:ttl=64/md5        200/0.021198s  171B ttl64 FAKE rec0622 | 1404B ttl127 | 171B ttl127 SNI rec0622 | 181B ttl127 171B ttl63 FAKE rec0622 | 1404B ttl126 | 171B ttl126 SNI rec0622 | 181B ttl126
+multirec+split         200/0.004762s  162B ttl127 rec0097 | 1428B ttl127 | 80B ttl127 | 101B ttl127 rec0060 162B ttl126 rec0097 | 1428B ttl126 | 80B ttl126 | 101B ttl126 rec0060
+tlsrec:at=sniext+split 200/0.005246s  162B ttl127 rec008e | 1418B ttl127 | 181B ttl127 | 24B ttl127 rec0013 162B ttl126 rec008e | 1418B ttl126 | 181B ttl126 | 24B ttl126 rec0013
+split:at=sniext        200/0.005354s  147B ttl127 rec0622 | 1428B ttl127 SNI | 181B ttl127 | 24B ttl127 rec0013 147B ttl126 rec0622 | 1428B ttl126 SNI | 181B ttl126 | 24B ttl126 rec0013
+oob                    200/0.005300s  158B ttl127 URG rec0622 | 1418B ttl127 | 80B ttl127 | 101B ttl127 rec0060 158B ttl126 URG rec0622 | 1418B ttl126 | 80B ttl126 | 101B ttl126 rec0060

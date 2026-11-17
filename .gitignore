@@ -1,0 +1,49 @@
+# Build outputs
+/build/
+/bin/
+/hevbuild/
+/.deps/
+/android/out/
+*.apk
+*.apk.idsig
+*.ipk
+*.exe
+mayak-linux-*
+mayak-android-*
+mayak-windows-*
+tspusim-*
+*.so
+
+# Android signing — never commit real keystores or passwords
+*.jks
+*.keystore
+keystore.pass
+keystore-info.txt
+
+# Secrets / local machine state
+/link.txt
+link-vps.txt
+vps-link*.txt
+.env
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+!android/assets/LICENSE-hev-socks5-tunnel.txt
+
+# Tooling / OS
+.venv/
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local SDK/JDK copies
+/android-sdk/
+/jdk/
+/ndk/

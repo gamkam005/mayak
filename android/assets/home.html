@@ -1,0 +1,229 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1020;color:#e6ebf7;font:15px/1.5 system-ui,Roboto,sans-serif;padding:16px}
+h1{letter-spacing:4px;margin:0;font-size:26px}.sub{color:#8a96b3;margin-bottom:12px}
+.top{display:flex;align-items:center;gap:10px}.top .sp{flex:1}
+.card{background:#141d36;border:1px solid #24304f;border-radius:14px;padding:14px;margin-bottom:12px}
+textarea,input[type=text],input[type=search]{width:100%;background:#0b1020;color:#e6ebf7;border:1px solid #24304f;border-radius:10px;padding:9px;font:13px ui-monospace,monospace}
+textarea{height:80px}
+button{border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:700;margin:6px 6px 0 0}
+.a{background:#ffb83d;color:#1a1200}.b{background:#24304f;color:#e6ebf7}.r{background:#ff5d73;color:#fff}
+.big{width:100%;padding:16px;font-size:18px;margin:8px 0 0}
+.st{font-weight:700}.on{color:#3ddc97}.off{color:#ffb83d}.m{color:#8a96b3;font-size:13px}code{background:#0b1020;padding:2px 6px;border-radius:5px}
+.seg{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.seg label{flex:1;min-width:30%;background:#0b1020;border:1px solid #24304f;border-radius:10px;padding:8px;text-align:center;font-size:13px}
+.seg input{display:none}.seg label.sel{border-color:#ffb83d;color:#ffb83d}
+.sw{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:8px}
+.sw input{width:22px;height:22px;accent-color:#ffb83d}
+pre{white-space:pre-wrap;word-break:break-all;font:11px ui-monospace,monospace;color:#9fb0d6;max-height:340px;overflow:auto;margin:6px 0 0;background:#0b1020;border-radius:8px;padding:8px}
+details summary{cursor:pointer;color:#c9d3ea;font-weight:600}
+table{width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed}td{padding:3px 4px;border-bottom:1px solid #1d2745;overflow-wrap:anywhere}
+.tech{display:flex;gap:10px;padding:9px 4px;border-top:1px solid #1d2745;align-items:flex-start}
+.tech input{width:20px;height:20px;margin-top:2px;accent-color:#ffb83d;flex:none}
+.tech b{display:block;font-size:14px}.tech .m{display:block}.tech code{font-size:11px}
+.ord{flex:none;min-width:22px;height:22px;border-radius:11px;background:#ffb83d;color:#1a1200;font-size:12px;font-weight:800;text-align:center;line-height:22px}
+.ord.no{background:transparent}
+#apps,#subs{position:fixed;inset:0;background:#0b1020;display:none;flex-direction:column;z-index:9}
+#subs .hd{padding:12px 14px;border-bottom:1px solid #24304f}#subs .ls{flex:1;overflow:auto;padding:4px 12px 40px}
+.srv{display:flex;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid #1d2745}
+.srv .t{flex:1;min-width:0}.srv .t div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srv button{margin:0;padding:7px 9px;font-size:13px}.srv.act{background:#17233f;border-radius:8px}
+.ms{font-weight:800;min-width:56px;text-align:right}.g{color:#3ddc97}.y{color:#ffb83d}.rd{color:#ff5d73}
+.star{background:transparent;color:#56607a;font-size:18px}.star.on{color:#ffb83d}
+.src{display:flex;gap:10px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid #1d2745}
+.src input{width:20px;height:20px;accent-color:#ffb83d;flex:none;margin-top:2px}.src .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.warn{background:#2a1f10;border:1px solid #5a4120;color:#ffcf7a;border-radius:10px;padding:8px 10px;font-size:13px;margin-top:8px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#24304f;color:#e6ebf7;padding:10px 16px;border-radius:12px;font-weight:600;display:none;z-index:20;max-width:90%}
+#apps .hd{padding:12px 14px;border-bottom:1px solid #24304f}
+#apps .ls{flex:1;overflow:auto;padding:0 10px}
+.app{display:flex;align-items:center;gap:12px;padding:8px 4px;border-bottom:1px solid #1d2745}
+.app img,.app .ph{width:36px;height:36px;border-radius:8px;flex:none;background:#24304f}
+.app .t{flex:1;min-width:0}.app .t div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app input{width:22px;height:22px;accent-color:#ffb83d;flex:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.chips span{background:#0b1020;border:1px solid #24304f;border-radius:8px;padding:3px 8px;font-size:12px}
+</style></head><body>
+<div class="top"><h1>🗼 МАЯК</h1><div class="sp"></div><button class="b" onclick="Mayak.dashboard()">Панель →</button></div>
+<div class="sub">напрямую в обход DPI · туннель, если не вышло · запасной вход из подписок</div>
+
+<div class="card"><div>Состояние: <span id="st" class="st">…</span></div>
+ <div class="m" id="rs"></div>
+ <button id="tg" class="a big" onclick="toggle()">Подключить</button></div>
+
+<div class="card"><b>Режим</b>
+ <div class="seg" id="mode">
+  <label data-v="vpn"><input type="radio" name="m">VPN — весь телефон</label>
+  <label data-v="proxy"><input type="radio" name="m">Только прокси :1080</label></div>
+ <b style="display:block;margin-top:12px">Маршрут</b>
+ <div class="seg" id="route">
+  <label data-v="auto"><input type="radio" name="r">Авто</label>
+  <label data-v="direct"><input type="radio" name="r">Напрямую</label>
+  <label data-v="tunnel"><input type="radio" name="r">Туннель</label></div>
+ <div class="m" style="margin-top:8px">Авто: сначала напрямую с обманом DPI (быстро, без сервера); если сайт не ответил или заблокирован по IP — через туннель МАЯКа. «Напрямую» работает и без ссылки. Режим и маршрут применяются после переподключения.</div></div>
+
+<div class="card"><b>Запасной вход из подписок</b>
+ <div class="seg" id="subm">
+  <label data-v="off"><input type="radio" name="s">Выкл</label>
+  <label data-v="reserve"><input type="radio" name="s">Резерв</label>
+  <label data-v="always"><input type="radio" name="s">Всегда</label></div>
+ <div class="m" style="margin-top:8px">Резерв: свой сервер МАЯК — основной; если он не отвечает, туннельный трафик идёт через лучший бесплатный сервер (VLESS, VMess, Trojan, Shadowsocks, Hysteria2). Всегда — только через подписки. Без своей ссылки подписки тоже работают. Применяется сразу.</div>
+ <div class="warn">⚠ Бесплатные серверы держат чужие люди: они видят, на какие сайты вы ходите. Не входите через них в банк и рабочие аккаунты.</div>
+ <div class="m" id="sbs" style="margin-top:8px"></div>
+ <button class="b" onclick="openSubs()">Серверы и подписки…</button></div>
+
+<div class="card"><div style="margin-bottom:6px">Ссылка <code>mayak://…</code> (нужна для туннеля):</div>
+ <textarea id="ln" placeholder="mayak://секрет@IP:443?..."></textarea>
+ <button class="b" onclick="ln.value=Mayak.paste()">Вставить</button><button class="b" onclick="Mayak.save(ln.value);toast('Ссылка сохранена');r()">Сохранить</button></div>
+
+<div class="card"><details id="dsd"><summary>Приёмы обмана DPI <span class="m" id="dsn"></span></summary>
+ <div class="m" style="margin:6px 0">Отметьте нужные. Порядок отметки = порядок попыток: если первый приём на сайте не сработал, в следующий раз пробуется второй и т. д. Применяется сразу, без переподключения.</div>
+ <div id="techs"></div>
+ <button class="b" onclick="setTech(DEF.slice())">По умолчанию</button><button class="a" onclick="saveTech()">Сохранить</button>
+</details></div>
+
+<div class="card"><b>Приложения мимо VPN</b>
+ <div class="m">Эти приложения ходят в интернет напрямую, как без МАЯКа (банки, госуслуги и т. п.).</div>
+ <div class="chips" id="bpc"></div>
+ <button class="b" onclick="openApps()">Выбрать приложения…</button>
+ <div class="sw"><span class="m">Пускать другие устройства (порт 1080 в Wi-Fi)</span><input type="checkbox" id="lan" onchange="Mayak.setLan(this.checked)"></div></div>
+
+<div class="card"><details id="hd"><summary>Сайты: напрямую или туннель</summary><table id="ht"></table></details></div>
+
+<div class="card"><b>Диагностика</b>
+ <div class="sw"><span>Подробный журнал <span class="m">(каждое решение, приёмы, тайминги)</span></span><input type="checkbox" id="dbg" onchange="Mayak.setDebug(this.checked);r()"></div>
+ <div class="m">Выключен по умолчанию. Включается сразу, без переподключения. Секреты ссылок в журнале скрыты.</div>
+ <details id="lg" style="margin-top:8px"><summary>Журнал</summary><pre id="log"></pre>
+  <button class="b" onclick="Mayak.shareLog()">Поделиться</button><button class="b" onclick="Mayak.copyLog()">Копировать</button><button class="b" onclick="Mayak.clearLog();r()">Очистить</button></details></div>
+
+<div id="subs"><div class="hd"><div class="top"><b style="font-size:17px">Серверы из подписок</b><div class="sp"></div><button class="a" onclick="closeSubs()">Готово</button></div>
+ <div class="m" id="sprog"></div>
+ <button class="b" onclick="subsPost('/api/subs/check','Проверка запущена')">Проверить сейчас</button><button class="b" onclick="subsPost('/api/subs/check?refetch=1','Обновляю подписки…')">Обновить подписки</button><button class="b" id="sauto" onclick="pick('')">Автовыбор</button></div>
+ <div class="ls">
+  <div id="sl"></div>
+  <h3 style="margin:18px 0 4px">Подписки</h3>
+  <div class="m">Встроенные можно отключить. Свои — добавьте ссылку на подписку (base64, обычный список или Clash). Всё хранится только на телефоне.</div>
+  <div id="srcs"></div>
+  <input type="text" id="surl" placeholder="https://…/sub" style="margin-top:8px"><button class="b" onclick="addSrc()">Добавить подписку</button><button class="b" onclick="$('surl').value=Mayak.paste()">Вставить</button>
+  <h3 style="margin:18px 0 4px">Свои серверы</h3>
+  <div class="m">Ссылки <code>vless://</code>, <code>vmess://</code>, <code>trojan://</code>, <code>ss://</code>, <code>hysteria2://</code> — по одной в строке.</div>
+  <textarea id="slinks" placeholder="vless://…"></textarea><button class="b" onclick="saveLinks()">Сохранить</button>
+  <div class="m" style="margin-top:14px">Проверка: TCP-пинг до 150 случайных серверов (поровну из каждой подписки), затем настоящий запрос через 48 лучших. Повтор — только живых, раз в 30 минут и только пока подписками пользуются; полный прогон — раз в 6 часов.</div>
+ </div></div>
+<div id="toast"></div>
+<div id="apps"><div class="hd"><div class="top"><b style="font-size:17px">Мимо VPN</b><div class="sp"></div><button class="a" onclick="saveApps()">Готово</button></div>
+ <input type="search" id="q" placeholder="Поиск по названию или пакету" oninput="drawApps()">
+ <div class="sw"><span class="m">Показывать системные</span><input type="checkbox" id="sys" onchange="drawApps()"></div>
+ <div class="m" id="acnt"></div></div><div class="ls" id="al"></div></div>
+
+<script>
+const $=id=>document.getElementById(id),ln=$('ln'),st=$('st');
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function seg(id,val,set){for(const l of $(id).children){l.className=l.dataset.v===val?'sel':'';l.onclick=()=>{set(l.dataset.v);seg(id,l.dataset.v,set)}}}
+// ---------- сообщения ----------
+let tt=null;function toast(m){if(Mayak.toast){Mayak.toast(m);return}const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(tt);tt=setTimeout(()=>t.style.display='none',2200)}
+// ---------- подписки ----------
+const PRESETS=[['igareck-white-all','igareck · белые списки (все)'],['igareck-white-mobile','igareck · белые списки Reality (мобильный)'],['igareck-black-mobile','igareck · чёрные списки (мобильный)'],['flat447-white','FLAT447 · белые списки'],['v2nodes-all','v2nodes · все страны'],['hamedcode-ss443','hamedcode · Shadowsocks :443'],['barryfar-vless','barry-far · VLESS (большой мировой)']];
+let SC={},SS=null;
+function loadSC(){try{SC=JSON.parse(Mayak.subsCfg()||'{}')}catch(e){SC={}}SC.disabled=SC.disabled||[];SC.urls=SC.urls||[];SC.links=SC.links||''}
+function saveSC(msg){Mayak.setSubsCfg(JSON.stringify(SC));if(msg)toast(msg);setTimeout(drawSubs,400)}
+function flag(n){const m=String(n||'').match(/[\u{1F1E6}-\u{1F1FF}]{2}/u);return m?m[0]:'🌐'}
+function msCls(v){return v<=0?'rd':v<400?'g':v<1200?'y':'rd'}
+function subsLine(){const on=Mayak.running();let t='';
+ if(on){try{const j=JSON.parse(Mayak.api('/api/subs')||'null');if(j){SS=j;const p=j.pool,a=p.active;
+  t=`живых ${p.alive} из ${p.total}`+(p.checking?' · идёт проверка…':'')+` · свой сервер: ${{ok:'отвечает',down:'не отвечает',unknown:'проверяю',none:'нет ссылки'}[j.mayak]||j.mayak}`;
+  if(j.via==='subs'&&a)t+=` · сейчас через ${flag(a.name)} ${a.proto} ${a.delay_ms||'?'} мс`;else if(j.via==='mayak')t+=' · сейчас через МАЯК'}}catch(e){}}
+ else t='Подключите МАЯК — серверы проверяются с вашей сети.';
+ $('sbs').textContent=t}
+function openSubs(){loadSC();$('slinks').value=SC.links;$('subs').style.display='flex';drawSubs()}
+function closeSubs(){$('subs').style.display='none'}
+function subsPost(path,msg){if(!Mayak.running()){toast('Сначала подключите МАЯК');return}Mayak.apiPost(path,'subsDone');if(msg)toast(msg)}
+function subsDone(t){setTimeout(drawSubs,300)}
+function pick(id){subsPost('/api/subs/select?id='+encodeURIComponent(id),id?'Сервер выбран вручную':'Автовыбор лучшего')}
+function pin(id,on){subsPost('/api/subs/pin?id='+encodeURIComponent(id)+'&on='+(on?1:0))}
+function speed(id){toast('Замер скорости, до 20 секунд…');Mayak.apiPost('/api/subs/speed?id='+encodeURIComponent(id),'speedDone')}
+function speedDone(t){try{const j=JSON.parse(t);toast(j.ok?`Скорость ${j.mbps.toFixed(1)} Мбит/с`:'Замер не удался: '+j.err)}catch(e){toast('Замер не удался')}drawSubs()}
+function drawSubs(){
+ if($('subs').style.display!=='flex')return;
+ subsLine();const p=SS&&Mayak.running()?SS.pool:null;
+ $('sprog').textContent=p?(p.progress||(p.last_run&&!p.last_run.startsWith('0001')?'последняя проверка '+new Date(p.last_run).toLocaleTimeString():'ещё не проверялось')):'Ядро не запущено: настройки сохраняются, проверка — после подключения.';
+ $('sauto').className=p&&!p.selected?'a':'b';
+ const nodes=p?p.nodes||[]:[];
+ $('sl').innerHTML=nodes.length?nodes.map(n=>`<div class="srv ${n.active?'act':''}"><button class="star ${n.pinned?'on':''}" onclick="pin('${n.id}',${!n.pinned})">★</button>
+  <div class="t"><div>${flag(n.name)} ${esc(n.name||n.host)}</div><div class="m">${n.proto} · ${n.net} · ${n.sec}${n.limited?' · <span class="y">заблокированное не открывает</span>':''}${n.mbps?' · '+n.mbps.toFixed(1)+' Мбит/с':''}${n.active?' · <b class="g">сейчас</b>':''}${n.selected?' · вручную':''}</div></div>
+  <span class="ms ${msCls(n.ok?n.delay_ms:0)}">${n.ok?n.delay_ms+' мс':'✕'}</span><button class="b" onclick="speed('${n.id}')">⚡</button><button class="${n.selected?'a':'b'}" onclick="pick('${n.selected?'':n.id}')">${n.selected?'✓':'Выбрать'}</button></div>`).join('')
+  :`<div class="m" style="padding:12px 0">${p?(p.checking?'Идёт проверка…':'Живых серверов пока нет — нажмите «Проверить сейчас».'):''}</div>`;
+ const info={};if(p)for(const s of p.sources||[])info[s.id]=s;
+ const row=(id,name,on,extra,del)=>{const s=info[id];const st=s?(s.err?`<span class="rd">${esc(s.err)}</span>`:s.count?`${s.count} серверов · `+Object.entries(s.mix||{}).map(([k,v])=>k+' '+v).join(', '):''):'';
+  return `<label class="src"><input type="checkbox" ${on?'checked':''} ${del?'disabled':''} data-id="${esc(id)}"><span class="t"><b>${esc(name)}</b><div class="m">${st}${extra||''}</div></span>${del?`<button class="b" style="margin:0" onclick="delSrc(${del-1});return false">✕</button>`:''}</label>`};
+ const users=(p?p.sources||[]:[]).filter(s=>!s.preset);
+ $('srcs').innerHTML=PRESETS.map(([id,n])=>row(id,n,!SC.disabled.includes(id))).join('')+SC.urls.map((u,i)=>{const s=users.find(x=>u.includes(x.url.replace('***','')))||null;return row(s?s.id:'',s?s.name:u.replace(/([?&](key|token)=)[^&]+/i,'$1***'),true,'',i+1)}).join('');
+ for(const c of $('srcs').querySelectorAll('input[data-id]'))if(!c.disabled)c.onchange=()=>{const id=c.dataset.id;SC.disabled=SC.disabled.filter(x=>x!==id);if(!c.checked)SC.disabled.push(id);saveSC(c.checked?'Подписка включена':'Подписка отключена')};
+}
+function addSrc(){const u=$('surl').value.trim();if(!/^https?:\/\//.test(u)&&!u.includes('://')){toast('Нужна ссылка https://… на подписку');return}if(!SC.urls.includes(u))SC.urls.push(u);$('surl').value='';saveSC('Подписка добавлена')}
+function delSrc(i){SC.urls.splice(i,1);saveSC('Подписка удалена')}
+function saveLinks(){SC.links=$('slinks').value.trim();saveSC('Свои серверы сохранены')}
+// ---------- приёмы ----------
+const TECH=[
+ ['tlsrec+split','Разрезать запись и пакет','ClientHello делится на две TLS-записи посреди имени сайта, а TCP-пакет — после первой буквы имени. Мягкий и самый совместимый — начинать с него.'],
+ ['tlsrec+disorder','Перепутать порядок','Первый кусок уходит с TTL=1 и теряется у ближайшего узла, сервер получает его повтором чуть позже. DPI видит хвост без начала. Задержка — доли секунды.'],
+ ['tlsrec+fake','Фейк с малым TTL','Перед настоящим пакетом уходит подделка с чужим именем (*.vk.com) и TTL 8: DPI её читает, до сервера она не доживает. Если сайт перестал открываться — сервер ближе 8 узлов.'],
+ ['tlsrec+fake:md5','Фейк с MD5-подписью','То же, но подделка помечена TCP-MD5: даже дойдя до сервера, она молча отбрасывается. Надёжнее простого фейка. Если ядро телефона MD5 не умеет — работает как обычный фейк (видно в журнале).'],
+ ['multirec+split','Мелкая нарезка записей','ClientHello режется на 4 TLS-записи: в начале, середине и конце имени. Против DPI, который умеет склеивать две записи.'],
+ ['multirec+disorder','Мелкая нарезка + путаница','4 записи и первый кусок с TTL=1. Самое «тяжёлое» сочетание без фейков.'],
+ ['tlsrec:at=sniext+split','Разрез перед полем SNI','Запись режется прямо перед расширением с именем: в первой записи DPI вообще не находит SNI.'],
+ ['split:at=mid','Только TCP-разрез','Без перекройки TLS, пакет режется посреди имени. Для серверов, которые плохо переносят разбитые записи.'],
+ ['split:at=sniext','TCP-разрез перед SNI','Первый TCP-пакет кончается прямо перед полем с именем.'],
+ ['disorder','Путаница без tlsrec','Первый кусок до первой буквы имени — с TTL=1, без перекройки записей.'],
+ ['oob','Байт OOB','После первого куска уходит 1 «срочный» байт: DPI вставляет его в поток, сервер выбрасывает. В сетях, где обнуляют флаг URG, ломает соединение — держать последним.'],
+ ['hmod+split','Хитрости для HTTP (порт 80)','Для сайтов без HTTPS: «hOsT:» вместо «Host:», без пробела, смешанный регистр домена плюс разрез. На HTTPS действует как обычный разрез.'],
+ ['none','Без хитростей','Просто напрямую. Имеет смысл последним — проверить, что сайт вообще доступен без туннеля.']];
+const DEF=['tlsrec+split','tlsrec+disorder','tlsrec+fake','oob'];
+let sel=[];
+function setTech(a){sel=a;drawTech()}
+function drawTech(){
+ $('techs').innerHTML=TECH.map(([id,t,d])=>{const i=sel.indexOf(id);return `<label class="tech"><input type="checkbox" data-id="${id}" ${i>=0?'checked':''}><span class="ord ${i<0?'no':''}">${i>=0?i+1:''}</span><span><b>${esc(t)}</b><span class="m">${esc(d)}</span><code>${esc(id)}</code></span></label>`}).join('');
+ for(const c of $('techs').querySelectorAll('input'))c.onchange=()=>{const id=c.dataset.id;sel=sel.filter(x=>x!==id);if(c.checked)sel.push(id);drawTech()};
+ $('dsn').textContent='('+sel.length+' выбрано)';
+}
+function saveTech(){if(!sel.length){toast('Выберите хотя бы один приём');return}
+ const v=sel.join(',')===DEF.join(',')?'':sel.join(',');Mayak.setDesync(v);toast(Mayak.running()?'Сохранено и применено':'Сохранено')}
+{const d=Mayak.desync();setTech(d?d.split(/[,\s]+/).filter(Boolean):DEF.slice())}
+// ---------- приложения ----------
+let APPS=null,chosen=new Set();
+function loadChosen(){chosen=new Set(Mayak.bypass().split(/[,\s]+/).filter(Boolean))}
+function drawChips(){const names=APPS?Object.fromEntries(APPS.map(a=>[a.pkg,a.name])):{};
+ $('bpc').innerHTML=chosen.size?[...chosen].map(p=>`<span>${esc(names[p]||p)}</span>`).join(''):'<span class="m" style="border:0;padding:0">ничего не выбрано</span>'}
+function openApps(){if(!APPS)APPS=JSON.parse(Mayak.apps()||'[]');$('apps').style.display='flex';drawApps()}
+let io=null;
+function drawApps(){
+ const q=$('q').value.trim().toLowerCase(),sys=$('sys').checked;
+ const list=APPS.filter(a=>(sys||!a.sys||chosen.has(a.pkg))&&(!q||a.name.toLowerCase().includes(q)||a.pkg.includes(q)))
+  .sort((a,b)=>(chosen.has(b.pkg)-chosen.has(a.pkg)));
+ $('acnt').textContent=`выбрано ${chosen.size} · показано ${list.length}`;
+ $('al').innerHTML=list.map(a=>`<label class="app"><span class="ph" data-pkg="${esc(a.pkg)}"></span><span class="t"><div>${esc(a.name)}</div><div class="m">${esc(a.pkg)}${a.net?'':' · без интернета'}</div></span><input type="checkbox" data-pkg="${esc(a.pkg)}" ${chosen.has(a.pkg)?'checked':''}></label>`).join('');
+ for(const c of $('al').querySelectorAll('input'))c.onchange=()=>{c.checked?chosen.add(c.dataset.pkg):chosen.delete(c.dataset.pkg);$('acnt').textContent=`выбрано ${chosen.size} · показано ${list.length}`};
+ if(io)io.disconnect();
+ io=new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){const s=e.target;io.unobserve(s);const u=Mayak.icon(s.dataset.pkg);if(u){const im=new Image();im.src=u;s.replaceWith(im)}}},{root:$('al'),rootMargin:'200px'});
+ for(const s of $('al').querySelectorAll('.ph'))io.observe(s);
+}
+function saveApps(){Mayak.setBypass([...chosen].join(','));$('apps').style.display='none';drawChips();
+ toast(Mayak.vpnRunning()?'Сохранено. Переподключите VPN, чтобы применить':'Сохранено')}
+// ---------- состояние ----------
+function r(){
+ if(document.activeElement!==ln)ln.value=Mayak.link();$('lan').checked=Mayak.lan();$('dbg').checked=Mayak.debug();
+ seg('mode',Mayak.mode(),v=>Mayak.setMode(v));seg('route',Mayak.route(),v=>Mayak.setRoute(v));seg('subm',Mayak.subsMode(),v=>{Mayak.setSubsMode(v);toast({off:'Подписки выключены',reserve:'Подписки — запасной вход',always:'Всегда через подписки'}[v])});
+ subsLine();drawSubs();
+ const on=Mayak.running();$('tg').textContent=on?'Отключить':'Подключить';$('tg').className=(on?'r':'a')+' big';
+ st.className='st '+(on?'on':'off');st.textContent=Mayak.state();
+ if(on)new Promise(ok=>ok(JSON.parse(Mayak.api('/api/route')||'null'))).then(s=>{if(!s)throw 0;
+  $('rs').textContent=`маршрут ${s.mode} · напрямую ${s.direct||0} · откат в туннель ${s.fallback||0} · туннель ${s.tunnel||0} · заморозок ${s.freezes||0}`;
+  if($('hd').open)$('ht').innerHTML=(s.hosts||[]).map(h=>`<tr><td style="width:44%">${esc(h.host)}</td><td style="width:26%">${h.path==='direct'?'✅ напрямую':h.path==='tunnel'?'🛡 туннель':'…'}</td><td>${esc(h.strategy)}</td></tr>`).join('');
+ }).catch(()=>{$('rs').textContent=''});else $('rs').textContent='';
+ if($('lg').open){const p=$('log'),end=p.scrollTop+p.clientHeight>=p.scrollHeight-20;p.textContent=Mayak.log()||'(пусто)';if(end)p.scrollTop=p.scrollHeight}
+}
+function toggle(){
+ if(Mayak.running()){Mayak.stop();setTimeout(r,600);return}
+ if(ln.value.trim())Mayak.save(ln.value);
+ if(Mayak.route()!=='direct'&&!Mayak.link()&&Mayak.subsMode()==='off'){toast('Для туннеля нужна ссылка mayak:// или подписки. Или выберите маршрут «Напрямую».');return}
+ Mayak.start();setTimeout(r,1500)}
+loadChosen();drawChips();if(chosen.size)setTimeout(()=>{APPS=JSON.parse(Mayak.apps()||'[]');drawChips()},300);r();setInterval(r,2000);
+</script></body></html>

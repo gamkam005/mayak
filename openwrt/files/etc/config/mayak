@@ -1,13 +1,26 @@
 config mayak 'main'
 	# 1 — запускать при загрузке
 	option enabled '0'
-	# ссылка mayak://… от сервера
+	# ссылка mayak://… от сервера (не нужна, если route='direct' или subs≠'off')
 	option link ''
 	# локальный SOCKS5/HTTP-прокси для podkop (не открывайте наружу)
 	option listen '127.0.0.1:1080'
 	# панель; если 9090 занят (Clash API / podkop), оставьте 9091; '' — выключить
 	option ui '0.0.0.0:9091'
-	# auto | mosaic | fast
+	# auto | mosaic | fast — как туннель режет трафик
 	option mode 'auto'
 	# байт на одно TLS-соединение в режиме mosaic
 	option budget '14000'
+	# маршрут: tunnel (всё через сервер) | direct (напрямую с обманом DPI) | auto (сначала напрямую, не вышло — туннель)
+	option route 'tunnel'
+	# приёмы обмана DPI по очереди ('' — по умолчанию); пример: 'tlsrec+split,tlsrec+disorder,tlsrec+fake,oob'
+	option desync ''
+	# DoH-серверы по IP для прямого пути; 'off' — системный DNS
+	option doh ''
+	# запасной вход из бесплатных подписок: off | reserve | always
+	# работает только в пакете mayak-full (с ядром Xray); в обычном mayak игнорируется
+	option subs 'off'
+	# кэш подписок (в /tmp, чтобы не изнашивать флеш)
+	option sub_state '/tmp/mayak-subs'
+	# 1 — подробный журнал
+	option debug '0'

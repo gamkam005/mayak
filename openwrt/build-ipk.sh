@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# Собирает mayak_<ver>_<arch>.ipk (формат opkg: tar.gz с debian-binary, control.tar.gz, data.tar.gz).
+# Собирает mayak_<ver>_<arch>.ipk (lite, без Xray) и mayak-full_<ver>_<arch>.ipk (с Xray) (формат opkg: tar.gz с debian-binary, control.tar.gz, data.tar.gz).
 set -euo pipefail
-cd "$(dirname "$0")"
-VER=${VER:-0.3.0}; BIN=${BIN:-../../build}; OUT=${OUT:-../../build}
-build() { # opkg-arch go-suffix
-  local arch=$1 suf=$2 T; T=$(mktemp -d)
+HERE=$(cd "$(dirname "$0")" && pwd)
+VER=${VER:-0.3.1}; BIN=${BIN:-$HERE/../build}; OUT=${OUT:-$HERE/../build}
+mkdir -p "$OUT"; BIN=$(cd "$BIN" && pwd); OUT=$(cd "$OUT" && pwd)
+cd "$HERE"
+build() { # opkg-arch go-suffix [full]
+  local arch=$1 suf=$2 kind=${3:-} T pkg=mayak src extra="" desc="MAYAK mosaic tunnel client (lite, no Xray): local SOCKS5/HTTP proxy for podkop"; T=$(mktemp -d)
+  if [ "$kind" = full ]; then pkg=mayak-full; src="$BIN/mayak-linux-$suf"; extra=$'Conflicts: mayak\n'; desc="MAYAK tunnel client with Xray reserve (VLESS/VMess/Trojan/SS/Hy2 subscriptions)"; else src="$BIN/mayak-lite-linux-$suf"; extra=$'Conflicts: mayak-full\n'; fi
   mkdir -p "$T/data/usr/bin" "$T/control"
   cp -r files/etc "$T/data/"
-  cp "$BIN/mayak-linux-$suf" "$T/data/usr/bin/mayak"; chmod 755 "$T/data/usr/bin/mayak" "$T/data/etc/init.d/mayak"
+  cp "$src" "$T/data/usr/bin/mayak"; chmod 755 "$T/data/usr/bin/mayak" "$T/data/etc/init.d/mayak"
   local size; size=$(du -sb "$T/data" | cut -f1)
   cat > "$T/control/control" <<CTL
-Package: mayak
+Package: $pkg
 Version: $VER
 Depends: libc
-Architecture: $arch
+${extra}Architecture: $arch
 Installed-Size: $size
 Maintainer: Kamil Gamidov
 Section: net
-Description: MAYAK mosaic tunnel client: local SOCKS5/HTTP proxy for podkop
+Description: $desc
 CTL
   echo "/etc/config/mayak" > "$T/control/conffiles"
   cat > "$T/control/postinst" <<'PI'
@@ -34,10 +37,15 @@ PR
   echo "2.0" > "$T/debian-binary"
   (cd "$T/control" && tar --owner=0 --group=0 -czf ../control.tar.gz .)
   (cd "$T/data" && tar --owner=0 --group=0 -czf ../data.tar.gz .)
-  (cd "$T" && tar --owner=0 --group=0 -czf "$OLDPWD/$OUT/mayak_${VER}_${arch}.ipk" ./debian-binary ./control.tar.gz ./data.tar.gz)
-  rm -rf "$T"; echo "built $OUT/mayak_${VER}_${arch}.ipk"
+  (cd "$T" && tar --owner=0 --group=0 -czf "$OUT/${pkg}_${VER}_${arch}.ipk" ./debian-binary ./control.tar.gz ./data.tar.gz)
+  rm -rf "$T"; echo "built $OUT/${pkg}_${VER}_${arch}.ipk"
 }
 build x86_64 amd64
 build aarch64_generic arm64
 build mipsel_24kc mipsle-softfloat
 build arm_cortex-a7_neon-vfpv4 armv7
+build mips_24kc mips-softfloat
+build aarch64_cortex-a53 arm64
+build x86_64 amd64 full
+build aarch64_generic arm64 full
+build aarch64_cortex-a53 arm64 full

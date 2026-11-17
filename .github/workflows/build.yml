@@ -21,7 +21,13 @@ jobs:
         run: go test ./...
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags lite ./...
+          GOOS=windows go vet ./cmd/...
+
+      - name: Test (lite)
+        run: go test -tags lite ./...
 
       - name: Build
         env:
@@ -30,3 +36,8 @@ jobs:
           go build -trimpath -o bin/mayak ./cmd/mayak
           go build -trimpath -o bin/tspusim ./cmd/tspusim
           ./bin/mayak version
+          go build -tags lite -trimpath -ldflags "-s -w" -o bin/mayak-lite ./cmd/mayak
+          ./bin/mayak-lite version
+          ls -l bin/
+          GOOS=windows GOARCH=amd64 go build -trimpath -o bin/mayak.exe ./cmd/mayak
+          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -tags lite -trimpath -o bin/mayak-mipsle ./cmd/mayak

@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-var version = "0.3.0"
+var version = "0.3.1"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `МАЯК %s — мозаичный туннель

@@ -4,3 +4,4 @@
 *.png binary
 *.java text
 *.go text
+windows/*.txt text eol=crlf

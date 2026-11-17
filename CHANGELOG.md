@@ -1,5 +1,30 @@
 # История версий
 
+## 0.3.1 — 2026-11-17
+
+Windows и OpenWrt догнали 0.3.0. Android не менялся (APK 0.3.0).
+
+- Тег сборки `lite` (`go build -tags lite`): без ядра Xray, ~8–10 МБ вместо
+  ~32 МБ. Подписки в такой сборке выключаются с понятным сообщением,
+  `/api/subs` отдаёт `available: false`, `mayak picker` отказывается работать.
+- Двойной щелчок по `mayak.exe` (и новый флаг `-easy`): маршрут `auto`,
+  подписки `reserve`, `subs.json` рядом с программой, на Windows —
+  системный прокси. Явно заданные флаги и режим из `subs.json` важнее.
+- Флаг `-sysproxy` (Windows): включает системный прокси на адрес `-listen`
+  и при выходе возвращает прежние настройки; оставшийся после аварийного
+  выхода прокси на тот же адрес выключается.
+- На Windows `-desync` по умолчанию — только работающие там приёмы:
+  `tlsrec+split,tlsrec:at=sniext+split,multirec+split,split:at=mid`.
+- Русский текст в консоли Windows (UTF-8).
+- Архив `MAYAK-windows-0.3.1.zip`: `autostart-on.bat` / `autostart-off.bat`
+  (ярлык в «Автозагрузке», свёрнутое окно), `stop.bat`, `subs.json`, `ПРОЧТИ.txt`.
+- OpenWrt: UCI-опции `route`, `desync`, `doh`, `subs`, `sub_state`, `debug`;
+  ссылка не обязательна при `route=direct` или `subs≠off`. Пакеты `mayak`
+  (lite) для x86_64, aarch64_generic, aarch64_cortex-a53,
+  arm_cortex-a7_neon-vfpv4, mipsel_24kc, mips_24kc и `mayak-full` (с Xray)
+  для x86_64 и aarch64. `install-openwrt.sh` проверяет место по размеру
+  бинарника.
+
 ## 0.3.0 — 2026-11-17
 
 Запасной вход из бесплатных подписок, если свой сервер МАЯК недоступен.

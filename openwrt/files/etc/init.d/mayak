@@ -7,17 +7,34 @@ PROG=/usr/bin/mayak
 
 start_service() {
 	config_load mayak
-	local enabled link listen ui mode budget
+	local enabled link listen ui mode budget route desync doh subs sub_state debug
 	config_get_bool enabled main enabled 0
 	config_get link main link ''
 	config_get listen main listen '127.0.0.1:1080'
 	config_get ui main ui '0.0.0.0:9091'
 	config_get mode main mode 'auto'
 	config_get budget main budget '14000'
+	config_get route main route 'tunnel'
+	config_get desync main desync ''
+	config_get doh main doh ''
+	config_get subs main subs 'off'
+	config_get sub_state main sub_state '/tmp/mayak-subs'
+	config_get_bool debug main debug 0
 	[ "$enabled" = 1 ] || return 0
-	[ -n "$link" ] || { logger -t mayak "нет ссылки: uci set mayak.main.link='mayak://...'"; return 1; }
+	if [ -z "$link" ] && [ "$route" != direct ] && [ "$subs" = off ]; then
+		logger -t mayak "нет ссылки: uci set mayak.main.link='mayak://...' (или route=direct, или subs=reserve в mayak-full)"
+		return 1
+	fi
 	procd_open_instance
-	procd_set_param command "$PROG" client -link "$link" -listen "$listen" -ui "$ui" -mode "$mode" -budget "$budget" -open=false
+	procd_set_param command "$PROG" client -listen "$listen" -ui "$ui" -mode "$mode" -budget "$budget" -route "$route" -open=false
+	[ -n "$link" ] && procd_append_param command -link "$link"
+	[ -n "$desync" ] && procd_append_param command -desync "$desync"
+	[ -n "$doh" ] && procd_append_param command -doh "$doh"
+	if [ "$subs" != off ]; then
+		mkdir -p "$sub_state"
+		procd_append_param command -subs "$subs" -sub-state "$sub_state" -sub-file /etc/mayak-subs.json
+	fi
+	[ "$debug" = 1 ] && procd_append_param command -debug
 	procd_set_param respawn 3600 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1

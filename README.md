@@ -106,12 +106,27 @@ export HEV=./hevbuild/libs BIN=./build
 Для эмулятора x86_64: соберите ещё `mayak-linux-amd64` и hev с `x86_64`, затем
 `X86=1 ./build.sh`.
 
-### Пакет OpenWrt
+### Облегчённая сборка (`-tags lite`) и пакеты OpenWrt
+
+Тег `lite` выкидывает ядро Xray: бинарник ~8–10 МБ вместо ~32 МБ, всё
+остальное (туннель, обман DPI, маршруты, панель) на месте, подписки
+выключаются с сообщением в журнале.
 
 ```sh
-# сначала кросс-сборка нужных mayak-linux-* в ./build
-VER=0.3.0 BIN=./build OUT=./build openwrt/build-ipk.sh
+L='-s -w -buildid='
+CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-mipsle-softfloat ./cmd/mayak
+CGO_ENABLED=0 GOOS=linux GOARCH=mips   GOMIPS=softfloat go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-mips-softfloat   ./cmd/mayak
+CGO_ENABLED=0 GOOS=linux GOARCH=arm    GOARM=7          go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-armv7            ./cmd/mayak
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-arm64            ./cmd/mayak
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-amd64            ./cmd/mayak
+# + полные mayak-linux-amd64 / mayak-linux-arm64 (с Xray) для пакетов mayak-full
+VER=0.3.1 BIN=./build OUT=./build openwrt/build-ipk.sh
 ```
+
+Получаются `mayak_<ver>_<arch>.ipk` (lite) для x86_64, aarch64_generic,
+aarch64_cortex-a53, arm_cortex-a7_neon-vfpv4, mipsel_24kc, mips_24kc и
+`mayak-full_<ver>_<arch>.ipk` (с Xray) для x86_64 и aarch64. Пакеты
+взаимоисключающие.
 
 ## Сервер на VPS
 
@@ -186,12 +201,22 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 
 ### Windows и Linux
 
-1. Положите ссылку одной строкой в `windows/link.txt` (рядом с `mayak.exe`)
-   или передайте `-link 'mayak://KEY@YOUR_SERVER:443?…'`.
-2. Запуск: `mayak.exe` / `./mayak client`. Панель откроется на
-   `http://127.0.0.1:9090/`, прокси SOCKS5 и HTTP — на `127.0.0.1:1080`.
-3. Как направить трафик:
-   - браузеры на Windows: `windows/proxy-on.bat`, выключение — `proxy-off.bat`;
+Для Windows есть готовый архив `MAYAK-windows-<ver>.zip` в Releases
+(`mayak.exe`, `link.txt`, `subs.json`, bat-файлы, `ПРОЧТИ.txt`).
+
+1. Положите ссылку одной строкой в `link.txt` (рядом с `mayak.exe`)
+   или передайте `-link 'mayak://KEY@YOUR_SERVER:443?…'`. Без ссылки тоже
+   работает: напрямую с обманом DPI и через бесплатные подписки.
+2. Запуск: двойной щелчок по `mayak.exe` — режим «просто работай»
+   (`-route auto -subs reserve`, на Windows ещё и системный прокси, который
+   возвращается как был при закрытии окна). То же из командной строки:
+   `mayak client -easy`. Панель — `http://127.0.0.1:9090/`, прокси SOCKS5 и
+   HTTP — `127.0.0.1:1080`.
+3. Windows: `autostart-on.bat` / `autostart-off.bat` — автозапуск при входе
+   (свёрнутым окном), `stop.bat` — остановить и выключить системный прокси.
+4. Как направить трафик:
+   - браузеры на Windows: системный прокси (сам при двойном щелчке, флаг
+     `-sysproxy`, или вручную `proxy-on.bat` / `proxy-off.bat`);
    - любой клиент с SOCKS: `socks5://127.0.0.1:1080`;
    - Telegram: Настройки → Продвинутые → Тип соединения → SOCKS5 `127.0.0.1:1080`.
 
@@ -216,19 +241,32 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 
 ### OpenWrt и podkop
 
-Пакет `.ipk` или скрипт `openwrt/install-openwrt.sh`. Панель по умолчанию на
+Пакет `.ipk` или скрипт `openwrt/install-openwrt.sh` (рядом положите
+бинарник `mayak-lite-linux-<arch>` из Releases). Панель по умолчанию на
 **9091**, чтобы не спорить с Clash API на 9090, если рядом стоит podkop.
 
+Какой пакет: архитектура — `opkg print-architecture` (или `grep ARCH
+/etc/openwrt_release`). Обычный `mayak` — lite (~3–4 МБ в архиве, ~8–10 МБ на
+диске) без подписок. `mayak-full` (~30 МБ на диске, только x86_64/aarch64) —
+с запасным входом из подписок: `uci set mayak.main.subs=reserve`. В OpenWrt
+25.x вместо opkg пакетный менеджер apk: `.ipk` туда не ставится, используйте
+`install-openwrt.sh` с бинарником.
+
 ```sh
-scp -O openwrt/mayak_0.3.0_x86_64.ipk root@192.168.1.1:/tmp/
+scp -O mayak_0.3.1_x86_64.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
-opkg install /tmp/mayak_0.3.0_x86_64.ipk
+opkg install /tmp/mayak_0.3.1_x86_64.ipk
 uci set mayak.main.link='mayak://KEY@YOUR_SERVER:443?…'
 uci set mayak.main.enabled=1
 uci commit mayak
 /etc/init.d/mayak start
 logread -e mayak
 ```
+
+Опции UCI (`/etc/config/mayak`): `link`, `listen`, `ui`, `mode`, `budget`,
+`route` (tunnel/direct/auto), `desync`, `doh`, `subs` (off/reserve/always,
+только mayak-full), `sub_state` (кэш, по умолчанию `/tmp/mayak-subs`), `debug`.
+Без ссылки служба запускается, если `route=direct` или `subs≠off`.
 
 Для podkop МАЯК — обычный SOCKS5 `socks5://127.0.0.1:1080`. Можно добавить его
 как ещё один узел urltest или отдельной секцией. Если у вас есть свой скрипт,

@@ -75,7 +75,7 @@ func runClient(args []string, auto bool) int {
 	open := fs.Bool("open", auto, "открыть панель в браузере")
 	verbose := fs.Bool("v", false, "подробный журнал")
 	routeMode := fs.String("route", "tunnel", "маршрут: tunnel (всё через сервер) | direct (напрямую с обманом DPI, сервер не нужен) | auto (сначала напрямую, не вышло — туннель)")
-	strat := fs.String("desync", route.DefaultStrategies, "приёмы обмана DPI по очереди: tlsrec, split, disorder, fake[:ttl=N], oob, none; через «+» сочетаются (на лету: POST /api/desync?list=…)")
+	strat := fs.String("desync", defaultDesync(), "приёмы обмана DPI по очереди: tlsrec, split, disorder, fake[:ttl=N], oob, none; через «+» сочетаются (на лету: POST /api/desync?list=…)")
 	dTimeout := fs.Duration("direct-timeout", 4*time.Second, "сколько ждать ответ сервера напрямую до отката на туннель")
 	freeze := fs.Duration("freeze", 8*time.Second, "auto: поток напрямую замер посреди TLS-записи дольше этого — сайт уходит в туннель (0 = выкл)")
 	tunHosts := fs.String("tunnel-hosts", "", "доп. сайты только через туннель: a.com,b.org,1.2.3.0/24 или @файл")
@@ -87,9 +87,27 @@ func runClient(args []string, auto bool) int {
 	subURLs := fs.String("sub", "", "доп. подписки или ссылки vless://… через запятую")
 	subState := fs.String("sub-state", "", "папка для кэша подписок и результатов проверок (по умолчанию mayak-subs рядом с программой)")
 	subMax := fs.Int("sub-max", 150, "сколько серверов проверять за один прогон (выборка поровну из подписок)")
+	easy := fs.Bool("easy", false, "как двойной щелчок: маршрут auto, подписки reserve, на Windows — системный прокси, subs.json рядом с программой (явно заданные флаги важнее)")
+	sysproxy := fs.Bool("sysproxy", false, "Windows: включить системный прокси на время работы (при выходе вернуть как было)")
 	if args != nil {
 		_ = fs.Parse(args)
 	}
+	if args == nil || *easy {
+		// двойной щелчок: всё, что нужно обычному человеку, без флагов
+		if !flagSet(fs, "route") {
+			*routeMode = route.ModeAuto
+		}
+		if !flagSet(fs, "subs") {
+			*subsMode = "reserve"
+		}
+		if !flagSet(fs, "sysproxy") {
+			*sysproxy = runtime.GOOS == "windows"
+		}
+		if *subFile == "" {
+			*subFile = besideExe("subs.json")
+		}
+	}
+	consoleUTF8()
 	logger := log.New(os.Stderr, "mayak ", log.LstdFlags)
 
 	raw := *linkS
@@ -212,6 +230,14 @@ func runClient(args []string, auto bool) int {
 	}
 	ch.pool = newPool(state, srcs, links, *subMax, lookup, helper.DialDesync, infof)
 	ch.SetMode(*subsMode)
+	if *sysproxy {
+		if restore, err := setSystemProxy(proxyHostPort(pl.Addr())); err != nil {
+			logger.Printf("системный прокси: %v", err)
+		} else {
+			logger.Printf("системный прокси Windows включён на %s (вернётся как было при закрытии окна)", proxyHostPort(pl.Addr()))
+			defer restore()
+		}
+	}
 	handlers := subsAPI(ch, rt, *subFile, strings.Split(*subURLs, ","), *speed, logger)
 	handlers["/api/debug"] = debugHandler(dbg, logger)
 
@@ -226,14 +252,14 @@ func runClient(args []string, auto bool) int {
 			c.Handle(p, h)
 		}
 		go func() { _ = c.ServeProxy(ctx, pl) }()
-		logger.Printf("МАЯК %s: прокси SOCKS5/HTTP на %s → %s (SNI %s, режим %s, подписки %s)", version, pl.Addr(), opt.Server, c.Snapshot().SNI, opt.Mode, *subsMode)
+		logger.Printf("МАЯК %s: прокси SOCKS5/HTTP на %s → %s (SNI %s, режим %s, подписки %s)", version, pl.Addr(), opt.Server, c.Snapshot().SNI, opt.Mode, ch.Mode())
 	} else {
 		h := ch.Handle
 		if rt != nil {
 			h = rt.Handle
 		}
 		go func() { _ = client.ServeProxyFunc(ctx, pl, h) }()
-		logger.Printf("МАЯК %s: без своего сервера, прокси SOCKS5/HTTP на %s, маршрут %s, подписки %s, приёмы: %s", version, pl.Addr(), *routeMode, *subsMode, *strat)
+		logger.Printf("МАЯК %s: без своего сервера, прокси SOCKS5/HTTP на %s, маршрут %s, подписки %s, приёмы: %s", version, pl.Addr(), *routeMode, ch.Mode(), *strat)
 	}
 	if *ui != "" {
 		ul, err := net.Listen("tcp", *ui)
@@ -272,7 +298,7 @@ func flagSet(fs *flag.FlagSet, name string) (set bool) {
 func firstLink(s string) string {
 	sc := bufio.NewScanner(strings.NewReader(s))
 	for sc.Scan() {
-		if t := strings.TrimSpace(sc.Text()); strings.HasPrefix(t, "mayak://") {
+		if t := strings.TrimSpace(strings.TrimPrefix(sc.Text(), "\ufeff")); strings.HasPrefix(t, "mayak://") {
 			return t
 		}
 	}

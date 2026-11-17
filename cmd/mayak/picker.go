@@ -37,6 +37,10 @@ func runPicker(args []string) int {
 	key := fs.String("key", "", "TLS-ключ")
 	_ = fs.Parse(args)
 	logger := log.New(os.Stderr, "picker ", log.LstdFlags)
+	if !sub.Available {
+		logger.Print("эта сборка без ядра Xray (lite): picker недоступен, нужна полная сборка")
+		return 2
+	}
 	if *path == "" {
 		b := make([]byte, 12)
 		_, _ = rand.Read(b)

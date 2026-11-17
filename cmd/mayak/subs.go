@@ -81,6 +81,12 @@ func (ch *chain) SetMode(m string) {
 	default:
 		m = "off"
 	}
+	if !sub.Available && m != "off" {
+		if old, _ := ch.mode.Load().(string); old == "" {
+			ch.logf("подписки: в этой сборке (lite) нет ядра Xray — запасной вход из подписок выключен")
+		}
+		m = "off"
+	}
 	if old, _ := ch.mode.Load().(string); old != m {
 		ch.mode.Store(m)
 		if old != "" {
@@ -198,7 +204,7 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 	return map[string]http.HandlerFunc{
 		"/api/subs": func(w http.ResponseWriter, r *http.Request) {
 			v, _ := ch.via.Load().(string)
-			js(w, map[string]any{"mode": ch.Mode(), "mayak": ch.health2s(), "via": v, "pool": ch.pool.Snapshot()})
+			js(w, map[string]any{"mode": ch.Mode(), "available": sub.Available, "mayak": ch.health2s(), "via": v, "pool": ch.pool.Snapshot()})
 		},
 		"/api/subs/check": post(func(w http.ResponseWriter, r *http.Request) {
 			go func() { _ = ch.pool.Check(context.Background(), r.URL.Query().Get("refetch") == "1") }()

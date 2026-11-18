@@ -16,7 +16,11 @@ MAYAK (МАЯК, “lighthouse”) is an anti-censorship toolkit:
 - **DPI desync** on the direct path (no server required);
 - **Android VPN mode** via `VpnService` and [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel);
 - routing modes `tunnel` / `direct` / `auto`;
-- **Xray reserve subscriptions** (VLESS, VMess, Trojan, Shadowsocks, Hysteria2) if your own server is down.
+- **Xray reserve subscriptions** (VLESS, VMess, Trojan, Shadowsocks, Hysteria2) if your own server is down;
+- **self-update** from the latest *stable* GitHub release (pre-releases, alpha/beta/rc are skipped):
+  `SHA256SUMS` is verified with an embedded ed25519 key, then the file by SHA-256.
+  Windows/Linux replace the binary and restart themselves, Android downloads the APK and
+  opens the system installer, OpenWrt has `mayak-update` (+ daily cron, `uci set mayak.main.auto_update=0` to disable).
 
 Build the core with Go 1.27: `CGO_ENABLED=0 go build -trimpath -o mayak ./cmd/mayak`.
 Deploy the server with `scripts/install-server.sh` or the systemd unit below
@@ -25,6 +29,17 @@ Deploy the server with `scripts/install-server.sh` or the systemd unit below
 and writes it to `/etc/mayak/link.txt`. Do not publish that link: it is the
 access secret. See the Russian sections for build details, routing, DPI
 techniques, Android/OpenWrt, and the disclaimer.
+
+### Acknowledgements
+
+The reserve entry works thanks to people who maintain free, constantly
+refreshed subscription lists. Thank you!
+
+- [@igareck](https://github.com/igareck) — [vpn-configs-for-russia](https://github.com/igareck/vpn-configs-for-russia): checked configs that work in Russia, including whitelist bypass.
+- [@FLAT447](https://github.com/FLAT447) — [v2ray-lists](https://github.com/FLAT447/v2ray-lists): free VPN configs (whitelists).
+- [@hamedcode](https://github.com/hamedcode) — [port-based-v2ray-configs](https://github.com/hamedcode/port-based-v2ray-configs): configs sorted by protocol and port, refreshed every 4 h.
+- [@barry-far](https://github.com/barry-far) — [V2ray-Config](https://github.com/barry-far/V2ray-Config): a large worldwide list, refreshed every 15 minutes.
+- [v2nodes.com](https://www.v2nodes.com/) — free nodes from many countries.
 
 ---
 
@@ -120,13 +135,40 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm    GOARM=7          go build -tags lite -tri
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-arm64            ./cmd/mayak
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-amd64            ./cmd/mayak
 # + полные mayak-linux-amd64 / mayak-linux-arm64 (с Xray) для пакетов mayak-full
-VER=0.3.1 BIN=./build OUT=./build openwrt/build-ipk.sh
+VER=0.3.2 BIN=./build OUT=./build openwrt/build-ipk.sh
 ```
 
 Получаются `mayak_<ver>_<arch>.ipk` (lite) для x86_64, aarch64_generic,
 aarch64_cortex-a53, arm_cortex-a7_neon-vfpv4, mipsel_24kc, mips_24kc и
 `mayak-full_<ver>_<arch>.ipk` (с Xray) для x86_64 и aarch64. Пакеты
 взаимоисключающие.
+
+## Автообновление
+
+Клиент сам ставит новые версии — без перехода по ссылкам. Источник —
+последний релиз GitHub с пометкой **Latest**; предварительные версии
+(pre-release, alpha, beta, rc, dev…) и всё, что не новее установленного,
+пропускаются. Перед установкой `SHA256SUMS` релиза проверяется подписью
+ed25519 (`SHA256SUMS.sig`, открытый ключ встроен в программу), затем файл —
+по SHA-256. Если GitHub напрямую недоступен, загрузка идёт через сам МАЯК.
+
+- **Windows / Linux** (`mayak client`, двойной щелчок): проверка через 30 с
+  после запуска и раз в 6 ч. Новая версия ставится на место старой
+  (старая — `.old`, удаляется при следующем запуске), клиент перезапускается
+  с теми же параметрами. `link.txt` и `subs.json` не трогаются. Выключить:
+  `-noupdate` или пустой файл `noupdate` рядом с программой. Вручную:
+  `mayak update` (`-check` — только проверить).
+- **Android**: проверка при открытии (не чаще раза в 6 ч) и кнопка
+  «Проверить обновления». «Обновить» скачивает APK и открывает системный
+  установщик — Android всегда просит подтвердить установку.
+- **OpenWrt**: `mayak-update` (opkg на 24.x; на 25.x/без пакета заменяется
+  `/usr/bin/mayak`), `mayak-update -n` — только проверить. Раз в сутки по
+  cron; выключить: `uci set mayak.main.auto_update=0; uci commit mayak;
+  /etc/init.d/mayak restart`.
+
+Выпуск релиза (для автора): `sha256sum * > SHA256SUMS` и
+`mayak sign -key <закрытый ключ> SHA256SUMS` → `SHA256SUMS.sig`; закрытый ключ
+в репозиторий не кладётся. Релиз без верной подписи клиенты не ставят.
 
 ## Сервер на VPS
 
@@ -253,9 +295,9 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 `install-openwrt.sh` с бинарником.
 
 ```sh
-scp -O mayak_0.3.1_x86_64.ipk root@192.168.1.1:/tmp/
+scp -O mayak_0.3.2_x86_64.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
-opkg install /tmp/mayak_0.3.1_x86_64.ipk
+opkg install /tmp/mayak_0.3.2_x86_64.ipk
 uci set mayak.main.link='mayak://KEY@YOUR_SERVER:443?…'
 uci set mayak.main.enabled=1
 uci commit mayak
@@ -265,7 +307,8 @@ logread -e mayak
 
 Опции UCI (`/etc/config/mayak`): `link`, `listen`, `ui`, `mode`, `budget`,
 `route` (tunnel/direct/auto), `desync`, `doh`, `subs` (off/reserve/always,
-только mayak-full), `sub_state` (кэш, по умолчанию `/tmp/mayak-subs`), `debug`.
+только mayak-full), `sub_state` (кэш, по умолчанию `/tmp/mayak-subs`), `debug`,
+`auto_update` (1 — раз в сутки `mayak-update`).
 Без ссылки служба запускается, если `route=direct` или `subs≠off`.
 
 Для podkop МАЯК — обычный SOCKS5 `socks5://127.0.0.1:1080`. Можно добавить его
@@ -279,6 +322,17 @@ logread -e mayak
 Перед правкой конфига podkop сделайте копию:
 `cp /etc/config/podkop /etc/config/podkop.bak-$(date +%F)`.
 После `podkop restart` трафик прервётся примерно на 5–15 секунд.
+
+## Благодарности
+
+Запасной вход работает благодаря людям, которые бесплатно ведут и
+постоянно обновляют подписки. Спасибо вам!
+
+- [@igareck](https://github.com/igareck) — [vpn-configs-for-russia](https://github.com/igareck/vpn-configs-for-russia): проверенные конфиги, работающие в РФ, в том числе обход белых списков.
+- [@FLAT447](https://github.com/FLAT447) — [v2ray-lists](https://github.com/FLAT447/v2ray-lists): бесплатные VPN-конфиги (белые списки).
+- [@hamedcode](https://github.com/hamedcode) — [port-based-v2ray-configs](https://github.com/hamedcode/port-based-v2ray-configs): конфиги по протоколам и портам, обновление каждые 4 ч.
+- [@barry-far](https://github.com/barry-far) — [V2ray-Config](https://github.com/barry-far/V2ray-Config): большой мировой список, обновление каждые 15 минут.
+- [v2nodes.com](https://www.v2nodes.com/) — бесплатные узлы из разных стран.
 
 ## Панель и диагностика
 

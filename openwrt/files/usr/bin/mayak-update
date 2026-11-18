@@ -1,0 +1,69 @@
+#!/bin/sh
+# mayak-update — обновить МАЯК на роутере до последней стабильной версии с GitHub.
+#   mayak-update        проверить и поставить
+#   mayak-update -n     только проверить
+#   mayak-update -r     сначала подождать случайно до часа (для cron, чтобы не все разом)
+# Только стабильные релизы (без alpha/beta/rc); SHA256SUMS проверяется подписью
+# ed25519, файл — по SHA256SUMS. На OpenWrt 24.x ставится пакет через opkg,
+# на 25.x (apk) и без пакета — заменяется /usr/bin/mayak.
+CHECK=0; RAND=0
+for a in "$@"; do case "$a" in -n) CHECK=1 ;; -r) RAND=1 ;; -q) ;; *) echo "mayak-update [-n] [-r]"; exit 2 ;; esac; done
+say() { echo "$*"; logger -t mayak-update "$*" 2>/dev/null; }
+[ "$RAND" = 1 ] && sleep "$(awk 'BEGIN{srand(); print int(rand()*3600)}')"
+BIN=/usr/bin/mayak
+[ -x "$BIN" ] || { say "нет $BIN"; exit 1; }
+URL=$(uci -q get mayak.main.update_url); [ -n "$URL" ] || URL=https://api.github.com/repos/gamkam005/mayak/releases/latest
+LISTEN=$(uci -q get mayak.main.listen); [ -n "$LISTEN" ] || LISTEN=127.0.0.1:1080
+# если GitHub напрямую не открывается — через сам МАЯК (если он запущен)
+PROXY="http://127.0.0.1:${LISTEN##*:}"
+CUR=$("$BIN" version | awk '{print $2}')
+
+# какой пакет стоит
+PKG=""
+if command -v opkg >/dev/null 2>&1; then
+	for p in mayak-full mayak; do
+		opkg status "$p" 2>/dev/null | grep -q '^Status:.* installed' && { PKG=$p; break; }
+	done
+fi
+ARCH=""
+if [ -n "$PKG" ]; then
+	ARCH=$(opkg status "$PKG" | awk '/^Architecture:/{print $2}')
+	ASSET="${PKG}_*_${ARCH}.ipk"
+else
+	ASSET="" # бинарник под эту систему выберет сам mayak
+fi
+
+if [ "$CHECK" = 1 ]; then
+	"$BIN" update -check -url "$URL" -proxy "$PROXY" ${ASSET:+-asset "$ASSET"}
+	exit $?
+fi
+
+was_running=0
+/etc/init.d/mayak running >/dev/null 2>&1 && was_running=1
+restart() { [ "$was_running" = 1 ] && /etc/init.d/mayak restart; }
+
+if [ -n "$PKG" ]; then
+	T=/tmp/mayak-update.ipk
+	"$BIN" update -url "$URL" -proxy "$PROXY" -asset "$ASSET" -out "$T"
+	rc=$?
+	[ $rc = 3 ] && exit 0
+	[ $rc = 0 ] || { say "не удалось скачать обновление (код $rc)"; rm -f "$T"; exit 1; }
+	if opkg install "$T"; then
+		say "обновлено: $PKG $CUR → $("$BIN" version | awk '{print $2}')"
+		rm -f "$T"; restart; exit 0
+	fi
+	rm -f "$T"; say "opkg не смог поставить пакет"; exit 1
+fi
+
+# без пакета (install-openwrt.sh, OpenWrt 25.x с apk): mayak заменяет сам себя
+FREE=$(df -k /usr 2>/dev/null | awk 'NR==2{print $4}')
+NEED=$(( $(wc -c < "$BIN") / 1024 * 12 / 10 ))
+[ -z "$FREE" ] || [ "$FREE" -gt "$NEED" ] || { say "мало места в /usr (${FREE} КБ, нужно ~${NEED} КБ)"; exit 1; }
+"$BIN" update -url "$URL" -proxy "$PROXY"
+rc=$?
+[ $rc = 3 ] && exit 0
+[ $rc = 0 ] || { say "обновление не удалось (код $rc)"; exit 1; }
+rm -f "$BIN.old"
+say "обновлено: $CUR → $("$BIN" version | awk '{print $2}')"
+restart
+exit 0

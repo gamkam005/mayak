@@ -24,3 +24,5 @@ config mayak 'main'
 	option sub_state '/tmp/mayak-subs'
 	# 1 — подробный журнал
 	option debug '0'
+	# 1 — раз в сутки (около 4–5 утра) ставить новую стабильную версию с GitHub (mayak-update)
+	option auto_update '1'

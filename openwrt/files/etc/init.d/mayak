@@ -5,8 +5,27 @@ STOP=10
 USE_PROCD=1
 PROG=/usr/bin/mayak
 
+CRON=/etc/crontabs/root
+MARK='# mayak-auto-update'
+
+# ежедневная проверка обновлений (uci: mayak.main.auto_update, по умолчанию 1)
+cron_sync() {
+	local au line changed=0
+	config_get_bool au main auto_update 1
+	line="23 4 * * * /usr/bin/mayak-update -r $MARK"
+	mkdir -p /etc/crontabs; touch "$CRON"
+	if [ "$au" = 1 ]; then
+		grep -qF "$MARK" "$CRON" || { echo "$line" >> "$CRON"; changed=1; }
+	elif grep -qF "$MARK" "$CRON"; then
+		sed -i "/mayak-auto-update/d" "$CRON"; changed=1
+	fi
+	[ "$changed" = 1 ] && [ -x /etc/init.d/cron ] && { /etc/init.d/cron enable; /etc/init.d/cron restart; } >/dev/null 2>&1
+	return 0
+}
+
 start_service() {
 	config_load mayak
+	cron_sync
 	local enabled link listen ui mode budget route desync doh subs sub_state debug
 	config_get_bool enabled main enabled 0
 	config_get link main link ''
@@ -26,7 +45,7 @@ start_service() {
 		return 1
 	fi
 	procd_open_instance
-	procd_set_param command "$PROG" client -listen "$listen" -ui "$ui" -mode "$mode" -budget "$budget" -route "$route" -open=false
+	procd_set_param command "$PROG" client -listen "$listen" -ui "$ui" -mode "$mode" -budget "$budget" -route "$route" -open=false -noupdate
 	[ -n "$link" ] && procd_append_param command -link "$link"
 	[ -n "$desync" ] && procd_append_param command -desync "$desync"
 	[ -n "$doh" ] && procd_append_param command -doh "$doh"

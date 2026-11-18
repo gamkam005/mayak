@@ -23,6 +23,7 @@ import (
 	"mayak/internal/desync"
 	"mayak/internal/protocol"
 	"mayak/internal/route"
+	"mayak/internal/update"
 )
 
 // debugHandler — GET: состояние, POST ?on=1|0: переключить диагностический журнал.
@@ -72,7 +73,7 @@ func runClient(args []string, auto bool) int {
 	sni := fs.String("sni", "", "перекрыть SNI из ссылки")
 	speed := fs.String("speed-url", "https://speed.cloudflare.com/__down?bytes=5000000", "что качать в тесте скорости")
 	down := fs.Int("down-workers", 0, "параллельных запросов вниз (по умолчанию 16)")
-	open := fs.Bool("open", auto, "открыть панель в браузере")
+	open := fs.Bool("open", auto && os.Getenv("MAYAK_RESTARTED") == "", "открыть панель в браузере")
 	verbose := fs.Bool("v", false, "подробный журнал")
 	routeMode := fs.String("route", "tunnel", "маршрут: tunnel (всё через сервер) | direct (напрямую с обманом DPI, сервер не нужен) | auto (сначала напрямую, не вышло — туннель)")
 	strat := fs.String("desync", defaultDesync(), "приёмы обмана DPI по очереди: tlsrec, split, disorder, fake[:ttl=N], oob, none; через «+» сочетаются (на лету: POST /api/desync?list=…)")
@@ -88,6 +89,10 @@ func runClient(args []string, auto bool) int {
 	subState := fs.String("sub-state", "", "папка для кэша подписок и результатов проверок (по умолчанию mayak-subs рядом с программой)")
 	subMax := fs.Int("sub-max", 150, "сколько серверов проверять за один прогон (выборка поровну из подписок)")
 	easy := fs.Bool("easy", false, "как двойной щелчок: маршрут auto, подписки reserve, на Windows — системный прокси, subs.json рядом с программой (явно заданные флаги важнее)")
+	noUpdate := fs.Bool("noupdate", false, "не проверять и не ставить обновления (иначе на Windows/Linux — при запуске и раз в 6 ч)")
+	updURL := fs.String("update-url", update.DefaultAPI, "адрес releases/latest для обновлений")
+	updEvery := fs.Duration("update-every", 6*time.Hour, "как часто проверять обновления")
+	updDelay := fs.Duration("update-delay", 30*time.Second, "первая проверка через столько после запуска")
 	sysproxy := fs.Bool("sysproxy", false, "Windows: включить системный прокси на время работы (при выходе вернуть как было)")
 	if args != nil {
 		_ = fs.Parse(args)
@@ -237,6 +242,11 @@ func runClient(args []string, auto bool) int {
 			logger.Printf("системный прокси Windows включён на %s (вернётся как было при закрытии окна)", proxyHostPort(pl.Addr()))
 			defer restore()
 		}
+	}
+	if why := autoUpdateBlocked(*noUpdate); why == "" {
+		startAutoUpdate(ctx, stop, autoUpdate{API: *updURL, Every: *updEvery, Delay: *updDelay, Proxy: "http://" + proxyHostPort(pl.Addr())}, logger)
+	} else if runtime.GOOS != "android" {
+		logger.Printf("обновления: %s", why)
 	}
 	handlers := subsAPI(ch, rt, *subFile, strings.Split(*subURLs, ","), *speed, logger)
 	handlers["/api/debug"] = debugHandler(dbg, logger)

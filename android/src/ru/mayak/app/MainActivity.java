@@ -98,6 +98,56 @@ public class MainActivity extends Activity {
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
 
     final class Bridge {
+        @JavascriptInterface public String version() { return BuildConfigInfo.version(MainActivity.this); }
+        /** Проверка обновления; ответ — в JS onUpdate(json, manual). Автопроверка — не чаще раза в 6 ч. */
+        @JavascriptInterface public void checkUpdate(final boolean manual) {
+            new Thread(new Runnable() { public void run() {
+                String j = manual ? null : Updater.cached(MainActivity.this);
+                if (j == null) j = Updater.run(MainActivity.this, false);
+                js("onUpdate(" + org.json.JSONObject.quote(j) + "," + manual + ")");
+            } }).start();
+        }
+        /** Скачать, проверить и отдать системе на установку. Состояние — в JS onUpdState(text). */
+        @JavascriptInterface public void installUpdate() {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                runOnUiThread(new Runnable() { public void run() {
+                    Toast.makeText(MainActivity.this, "Разрешите МАЯКу установку приложений и нажмите «Обновить» ещё раз", Toast.LENGTH_LONG).show();
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS));
+                    }
+                } });
+                return;
+            }
+            js("onUpdState('Скачиваю и проверяю…')");
+            new Thread(new Runnable() { public void run() {
+                String j = Updater.run(MainActivity.this, true);
+                String err = null;
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject(j);
+                    if (o.has("error")) err = o.getString("error");
+                    else if (!o.optBoolean("newer")) err = "новее нет";
+                } catch (Exception e) { err = "ответ не разобран"; }
+                File f = Updater.apk(MainActivity.this);
+                if (err == null) {
+                    android.content.pm.PackageInfo pi = getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
+                    if (pi == null || !getPackageName().equals(pi.packageName)) err = "скачанный файл — не МАЯК";
+                }
+                if (err != null) {
+                    f.delete();
+                    js("onUpdState(" + org.json.JSONObject.quote("Не удалось обновить: " + err) + ")");
+                    return;
+                }
+                js("onUpdState('Скачано и проверено — подтвердите установку')");
+                runOnUiThread(new Runnable() { public void run() {
+                    Intent i = new Intent(Intent.ACTION_VIEW).setDataAndType(ApkProvider.URI, "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    try { startActivity(i); } catch (Exception e) { Toast.makeText(MainActivity.this, "Нет системного установщика: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+                } });
+            } }).start();
+        }
+        private void js(final String code) { runOnUiThread(new Runnable() { public void run() { web.evaluateJavascript(code, null); } }); }
         @JavascriptInterface public String link() { return Prefs.link(MainActivity.this); }
         @JavascriptInterface public boolean running() { return MayakService.running || MayakVpn.running; }
         @JavascriptInterface public boolean vpnRunning() { return MayakVpn.running; }

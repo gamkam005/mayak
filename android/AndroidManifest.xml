@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="ru.mayak.app" android:versionCode="4" android:versionName="0.3.0">
+    package="ru.mayak.app" android:versionCode="5" android:versionName="0.3.2">
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- выбор приложений «мимо VPN»: нужен полный список установленных (APK ставится не из Play) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+    <!-- самообновление: скачанный с GitHub APK ставит системный установщик (с подтверждением) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application android:label="МАЯК" android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true" android:extractNativeLibs="true"
         android:allowBackup="false">
@@ -38,5 +40,7 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="VPN: routes device traffic through a local anti-censorship proxy"/>
         </service>
+        <provider android:name=".ApkProvider" android:authorities="ru.mayak.app.apk"
+            android:exported="false" android:grantUriPermissions="true"/>
     </application>
 </manifest>

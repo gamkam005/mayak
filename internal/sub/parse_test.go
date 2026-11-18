@@ -80,4 +80,3 @@ func TestParseLinks(t *testing.T) {
 		_ = e.Close()
 	}
 }
-

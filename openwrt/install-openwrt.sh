@@ -10,11 +10,12 @@ case "$(uname -m)" in
 esac
 B=""; for c in "$D/mayak-lite-linux-$A" "$D/mayak-linux-$A" "$D/../bin/mayak-lite-linux-$A" "$D/../bin/mayak-linux-$A"; do [ -f "$c" ] && B=$c && break; done
 [ -n "$B" ] || { echo "Нет бинарника mayak-linux-$A рядом со скриптом"; exit 1; }
-FREE=$(df -k /usr | awk 'NR==2{print $4}')
+FREE=$(df -k /usr 2>/dev/null | awk 'NR==2{print $4}')
 NEED=$(( $(wc -c < "$B") / 1024 + 1000 ))
-[ "${FREE:-0}" -gt "$NEED" ] || { echo "Мало места в /usr: ${FREE} КБ, нужно ~${NEED} КБ (lite ~8–10 МБ, full ~30 МБ)."; exit 1; }
+[ -z "$FREE" ] || [ "$FREE" -gt "$NEED" ] || { echo "Мало места в /usr: ${FREE} КБ, нужно ~${NEED} КБ (lite ~8–10 МБ, full ~30 МБ)."; exit 1; }
 cp "$B" /usr/bin/mayak && chmod 755 /usr/bin/mayak
 cp "$D/files/etc/init.d/mayak" /etc/init.d/mayak && chmod 755 /etc/init.d/mayak
+cp "$D/files/usr/bin/mayak-update" /usr/bin/mayak-update && chmod 755 /usr/bin/mayak-update
 [ -f /etc/config/mayak ] || cp "$D/files/etc/config/mayak" /etc/config/mayak
 /etc/init.d/mayak enable
 echo "Установлено. Дальше:"

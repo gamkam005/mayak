@@ -88,6 +88,10 @@ table{width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed}td{p
 
 <div class="card"><details id="hd"><summary>Сайты: напрямую или туннель</summary><table id="ht"></table></details></div>
 
+<div class="card"><b>Обновления</b> <span class="m" id="ver"></span>
+ <div class="m" id="updBox" style="margin:6px 0">Только стабильные версии с GitHub; файл проверяется подписью перед установкой.</div>
+ <button class="b" onclick="checkUpd(true)">Проверить обновления</button><button class="a" id="updBtn" style="display:none" onclick="Mayak.installUpdate()">Обновить</button></div>
+
 <div class="card"><b>Диагностика</b>
  <div class="sw"><span>Подробный журнал <span class="m">(каждое решение, приёмы, тайминги)</span></span><input type="checkbox" id="dbg" onchange="Mayak.setDebug(this.checked);r()"></div>
  <div class="m">Выключен по умолчанию. Включается сразу, без переподключения. Секреты ссылок в журнале скрыты.</div>
@@ -225,5 +229,13 @@ function toggle(){
  if(ln.value.trim())Mayak.save(ln.value);
  if(Mayak.route()!=='direct'&&!Mayak.link()&&Mayak.subsMode()==='off'){toast('Для туннеля нужна ссылка mayak:// или подписки. Или выберите маршрут «Напрямую».');return}
  Mayak.start();setTimeout(r,1500)}
+// ---------- обновления ----------
+function checkUpd(m){if(m)$('updBox').textContent='Проверяю…';Mayak.checkUpdate(m)}
+function onUpdState(t){$('updBox').textContent=t}
+function onUpdate(s,manual){let j={};try{j=JSON.parse(s)}catch(e){}
+ if(j.error){$('updBtn').style.display='none';if(manual){$('updBox').textContent='Не удалось проверить: '+j.error;toast('Не удалось проверить обновления')}return}
+ if(j.newer){$('updBox').textContent='Доступна версия '+j.latest+' (у вас '+j.current+')';$('updBtn').style.display='';if(!manual)toast('Вышла новая версия МАЯК '+j.latest)}
+ else{$('updBtn').style.display='none';$('updBox').textContent='У вас последняя версия';if(manual)toast('У вас последняя версия')}}
+if(Mayak.version){$('ver').textContent='· версия '+Mayak.version();setTimeout(()=>checkUpd(false),1200)}
 loadChosen();drawChips();if(chosen.size)setTimeout(()=>{APPS=JSON.parse(Mayak.apps()||'[]');drawChips()},300);r();setInterval(r,2000);
 </script></body></html>

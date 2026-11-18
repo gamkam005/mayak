@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"mayak/internal/desync"
 	"mayak/internal/protocol"
 	"mayak/internal/route"
+	"mayak/internal/sub"
 	"mayak/internal/update"
 )
 
@@ -94,6 +96,13 @@ func runClient(args []string, auto bool) int {
 	updURL := fs.String("update-url", update.DefaultAPI, "адрес releases/latest для обновлений")
 	updEvery := fs.Duration("update-every", 6*time.Hour, "как часто проверять обновления")
 	updDelay := fs.Duration("update-delay", 30*time.Second, "первая проверка через столько после запуска")
+	subRefresh := fs.Duration("sub-refresh", 6*time.Hour, "как часто перекачивать подписки (не чаще 15m; поле refresh в subs.json важнее)")
+	subRecheck := fs.Duration("sub-recheck", 30*time.Minute, "как часто перепроверять живые серверы (поле recheck в subs.json важнее)")
+	subTestURL := fs.String("sub-test-url", sub.DefaultTestURL, "адрес для проверки «реальной задержки» через сервер (поле test_url)")
+	subHonor := fs.Bool("sub-honor", true, "слушать заголовок подписки profile-update-interval: качать так часто, как она просит, но не чаще 15m (поле honor_update_interval)")
+	uiPass := fs.String("ui-pass", "", "пароль панели (или @файл); без него на адресе не localhost пароль создаётся сам и пишется в файл")
+	uiPassFile := fs.String("ui-pass-file", "", "файл с паролем панели (по умолчанию /etc/mayak/ui.pass, если есть)")
+	uiTLS := fs.Bool("ui-tls", false, "панель по HTTPS с самоподписанным сертификатом (создаётся рядом с файлом пароля)")
 	sysproxy := fs.Bool("sysproxy", false, "Windows: включить системный прокси на время работы (при выходе вернуть как было)")
 	if args != nil {
 		_ = fs.Parse(args)
@@ -118,7 +127,8 @@ func runClient(args []string, auto bool) int {
 		}
 	}
 	consoleUTF8()
-	logger := log.New(os.Stderr, "mayak ", log.LstdFlags)
+	ring := newLogRing(os.Stderr, 500)
+	logger := log.New(ring, "mayak ", log.LstdFlags)
 
 	raw := *linkS
 	if raw == "" {
@@ -128,9 +138,9 @@ func runClient(args []string, auto bool) int {
 			raw = firstLink(string(b))
 		}
 	}
-	srcs, links, fileMode := readSubsFile(*subFile, strings.Split(*subURLs, ","))
-	if fileMode != "" && !flagSet(fs, "subs") {
-		*subsMode = fileMode
+	srcs, links, subsCfg := readSubsFile(*subFile, strings.Split(*subURLs, ","))
+	if subsCfg.Mode != "" && !flagSet(fs, "subs") {
+		*subsMode = subsCfg.Mode
 	}
 	switch *subsMode {
 	case "off", "reserve", "always":
@@ -239,6 +249,8 @@ func runClient(args []string, auto bool) int {
 		state = defaultSubsState()
 	}
 	ch.pool = newPool(state, srcs, links, *subMax, lookup, helper.DialDesync, infof)
+	defCfg := sub.Config{Refresh: *subRefresh, Recheck: *subRecheck, TestURL: *subTestURL, HonorInterval: *subHonor}
+	ch.pool.SetConfig(poolConfig(subsCfg, defCfg))
 	ch.SetMode(*subsMode)
 	if *sysproxy {
 		if restore, err := setSystemProxy(proxyHostPort(pl.Addr())); err != nil {
@@ -253,8 +265,12 @@ func runClient(args []string, auto bool) int {
 	} else if runtime.GOOS != "android" {
 		logger.Printf("обновления: %s", why)
 	}
-	handlers := subsAPI(ch, rt, *subFile, strings.Split(*subURLs, ","), *speed, logger)
+	extraSubs := strings.Split(*subURLs, ",")
+	handlers := subsAPI(ch, rt, *subFile, extraSubs, *speed, defCfg, logger)
 	handlers["/api/debug"] = debugHandler(dbg, logger)
+	for p, h := range panelAPI(*subFile, extraSubs, defCfg, ring, func() error { applySubsFile(ch, *subFile, extraSubs, defCfg); return nil }) {
+		handlers[p] = h
+	}
 
 	if c != nil {
 		go c.Run(ctx)
@@ -293,20 +309,42 @@ func runClient(args []string, auto bool) int {
 		}
 	}
 	if *ui != "" {
+		pass, perr := uiPassword(*uiPass, *uiPassFile, *ui, logger.Printf)
 		ul, err := net.Listen("tcp", *ui)
-		if err != nil {
+		if perr != nil {
+			logger.Printf("панель выключена: %v", perr)
+			if ul != nil {
+				_ = ul.Close()
+			}
+		} else if err != nil {
 			logger.Printf("панель: %v", err)
 		} else {
+			scheme := "http"
+			if *uiTLS {
+				dir := filepath.Dir(generatedPassPath())
+				if *uiPassFile != "" {
+					dir = filepath.Dir(*uiPassFile)
+				}
+				if tc, err := uiTLSConfig(dir, logger.Printf); err != nil {
+					logger.Printf("панель: HTTPS не включился (%v) — работаю по HTTP", err)
+				} else {
+					ul, scheme = tls.NewListener(ul, tc), "https"
+				}
+			}
+			auth := newUIAuth(pass, scheme == "https")
+			if !auth.on && !isLoopbackBind(*ui) {
+				logger.Printf("панель: ВНИМАНИЕ — без пароля на %s", *ui)
+			}
 			if c != nil {
-				go func() { _ = c.ServeDashboard(ctx, ul, *speed) }()
+				go func() { _ = c.ServeDashboard(ctx, ul, *speed, auth.Wrap) }()
 			} else {
 				snap := func() any { return map[string]string{"mode": route.ModeTunnel} }
 				if rt != nil {
 					snap = func() any { return rt.Snapshot() }
 				}
-				go func() { _ = client.ServeMini(ctx, ul, snap, handlers) }()
+				go func() { _ = client.ServeMini(ctx, ul, snap, handlers, auth.Wrap) }()
 			}
-			url := "http://" + ul.Addr().String() + "/"
+			url := scheme + "://" + ul.Addr().String() + "/"
 			logger.Printf("панель: %s", url)
 			if *open {
 				go func() { time.Sleep(500 * time.Millisecond); openBrowser(url) }()

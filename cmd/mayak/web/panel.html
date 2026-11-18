@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>МАЯК — серверы и подписки</title>
+<style>
+:root{--bg:#0b1020;--card:#141d36;--line:#24304f;--fg:#e6ebf7;--mut:#8a96b3;--acc:#ffb83d;--ok:#3ddc97;--bad:#ff5d73;--warn:#ffcc66;--blue:#59a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header b{font-size:18px}.sp{flex:1}
+nav{display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap}
+nav button,.btn{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:7px 12px;font:inherit;cursor:pointer}
+nav button.on{background:var(--acc);color:#1a1300;border-color:var(--acc);font-weight:700}
+.btn:hover{border-color:var(--blue)}.btn.pri{background:var(--acc);color:#1a1300;border-color:var(--acc);font-weight:700}
+.btn.sm{padding:3px 8px;font-size:12px}.btn:disabled{opacity:.5;cursor:default}
+main{padding:0 16px 24px}section{display:none}section.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px}.kv div:nth-child(odd){color:var(--mut)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.notice{background:#3a2a07;border:1px solid var(--warn);color:var(--warn);border-radius:10px;padding:9px 12px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 6px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--bg)}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mut{color:var(--mut)}
+tr.act td{background:#1b2a4a}.nm{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.err{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bad)}
+textarea,input[type=text],select{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font:13px ui-monospace,Consolas,monospace}
+textarea{min-height:110px;resize:vertical}label.ch{display:flex;gap:8px;align-items:flex-start;padding:4px 0}
+.hint{color:var(--mut);font-size:12px;margin:4px 0 10px}h3{margin:4px 0 10px;font-size:15px}
+pre#log{white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,Consolas,monospace;color:#c8d2ea;max-height:70vh;overflow:auto;margin:0}
+#msg{position:fixed;right:16px;bottom:16px;max-width:420px;padding:10px 14px;border-radius:10px;display:none;z-index:9}
+.scroll{overflow:auto;max-height:70vh}
+</style></head><body>
+<header><b>🗼 МАЯК</b><span class="mut">серверы и подписки</span><div class="sp"></div>
+ <button class="btn" id="back" hidden onclick="Mayak.home()">← В приложение</button>
+ <a class="btn" href="/" id="dash" hidden>Панель туннеля</a>
+ <button class="btn" id="logout" hidden onclick="logout()">Выйти</button></header>
+<nav><button data-t="nodes" class="on">Узлы</button><button data-t="subs">Подписки</button><button data-t="cfg">Настройки</button><button data-t="log">Лог</button></nav>
+<main>
+<section id="t-nodes" class="on">
+ <div id="notice" class="notice" hidden></div>
+ <div class="card"><div class="kv" id="sum"></div>
+  <div class="row" style="margin-top:10px">
+   <button class="btn" onclick="act('/api/subs/check')">Проверить сейчас</button>
+   <button class="btn" onclick="act('/api/subs/check?refetch=1')">Скачать подписки и проверить</button>
+   <button class="btn" id="auto" onclick="act('/api/subs/select?id=')">Вернуть автовыбор</button>
+   <label class="ch" style="padding:0"><input type="checkbox" id="onlyAlive"> только живые</label>
+   <span class="mut" id="prog"></span></div></div>
+ <div class="card scroll"><table><thead><tr><th></th><th>Сервер</th><th>Тип</th><th>Подписка</th><th class="n">TCP</th><th class="n">Задержка</th><th class="n">Скорость</th><th>Состояние</th><th>Проверен</th><th></th></tr></thead><tbody id="nodes"></tbody></table></div>
+ <div class="hint">Задержка — настоящий запрос через сервер (как «реальная задержка» в v2rayN). При сбое активного сервера он сразу проверяется ещё 2 раза; ни одного ответа — сервер выпадает, трафик идёт через следующий. Если умер выбранный вручную — включается автовыбор.</div>
+</section>
+<section id="t-subs">
+ <div class="card"><h3>Состояние подписок</h3><div class="scroll"><table><thead><tr><th>Подписка</th><th class="n">Серверов</th><th>Протоколы</th><th>Скачана</th><th>Обновление</th><th>Ошибка</th></tr></thead><tbody id="srcs"></tbody></table></div></div>
+ <div class="card"><h3>Свои подписки</h3>
+  <div class="hint">По одному адресу в строке. Ключ в сохранённых адресах скрыт (***): такую строку можно оставить как есть — адрес сохранится. Новый адрес вставляйте целиком.</div>
+  <textarea id="urls" spellcheck="false"></textarea>
+  <h3 style="margin-top:12px">Свои серверы</h3>
+  <div class="hint">Ссылки vless:// vmess:// trojan:// ss:// hysteria2:// — по одной в строке (секреты тоже скрыты).</div>
+  <textarea id="links" spellcheck="false"></textarea>
+  <h3 style="margin-top:12px">Встроенные бесплатные подписки</h3><div id="presets"></div>
+  <h3 style="margin-top:12px">Режим</h3>
+  <select id="mode"><option value="">как задано при запуске</option><option value="always">always — только подписки</option><option value="reserve">reserve — если свой сервер недоступен</option><option value="off">off — выключены</option></select>
+  <div class="row" style="margin-top:12px"><button class="btn pri" onclick="save()">Сохранить и применить</button><span class="mut" id="path"></span></div></div>
+</section>
+<section id="t-cfg">
+ <div class="card"><h3>Обновление и проверка</h3>
+  <div class="hint">Формат: 6h, 90m, 30m. Пусто — значение по умолчанию (в скобках).</div>
+  <div class="kv" style="align-items:center">
+   <div>Перекачивать подписки раз в</div><div><input type="text" id="refresh" placeholder="6h"></div>
+   <div>Перепроверять живые раз в</div><div><input type="text" id="recheck" placeholder="30m"></div>
+   <div>Адрес проверки задержки</div><div><input type="text" id="testurl" placeholder="http://www.gstatic.com/generate_204"></div>
+  </div>
+  <label class="ch" style="margin-top:10px"><input type="checkbox" id="honor"> <span>Слушать подписку: если она просит обновляться чаще (заголовок <code>profile-update-interval</code>), качать так, как она просит, но не чаще раза в 15 минут.</span></label>
+  <div class="row" style="margin-top:8px"><button class="btn pri" onclick="save()">Сохранить и применить</button></div>
+  <div class="hint" id="eff"></div></div>
+</section>
+<section id="t-log">
+ <div class="card"><div class="row" style="margin-bottom:8px"><label class="ch" style="padding:0"><input type="checkbox" id="follow" checked> обновлять</label><button class="btn sm" onclick="copyLog()">Скопировать</button><span class="mut">последние 500 строк, секреты скрыты</span></div>
+ <pre id="log"></pre></div>
+</section>
+</main>
+<div id="msg"></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let CSRF='',cfg=null,tab='nodes',snap=null;
+if(window.Mayak)$('back').hidden=false;
+function msg(t,ok){const m=$('msg');m.textContent=t;m.style.display='block';m.style.background=ok?'#123d2c':'#3d1220';m.style.border='1px solid '+(ok?'#3ddc97':'#ff5d73');clearTimeout(m._t);m._t=setTimeout(()=>m.style.display='none',5000)}
+async function api(path,opt={}){opt.credentials='same-origin';opt.headers=Object.assign({},opt.headers||{});if(opt.method&&opt.method!=='GET')opt.headers['X-CSRF-Token']=CSRF;
+ const r=await fetch(path,opt);if(r.status===401){location='/login';throw new Error('нужен вход')}return r}
+async function act(path){try{const r=await api(path,{method:'POST'});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)msg(j.err||('ошибка '+r.status));else msg('готово',true);setTimeout(tick,400);return j}catch(e){msg(String(e.message||e))}}
+async function logout(){await api('/logout',{method:'POST'}).catch(()=>{});location='/login'}
+const dur=s=>s?String(s).replace(/(\d)m0s$/,'$1m').replace(/(\d)h0m$/,'$1h').replace(/^0s$/,'—'):'';
+function ago(t){if(!t||t.startsWith('0001'))return'—';const s=(Date.now()-new Date(t))/1000;if(s<60)return Math.max(0,s|0)+' с назад';if(s<3600)return(s/60|0)+' мин назад';if(s<86400)return(s/3600|0)+' ч назад';return(s/86400|0)+' д назад'}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;history.replaceState(null,'','#'+tab);document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+tab));if(tab==='subs'||tab==='cfg')loadCfg();tick()});
+$('onlyAlive').onchange=()=>render();
+function srcName(id){if(id==='свои')return'свои серверы';const s=(snap?.pool?.sources||[]).find(x=>x.id===id);return s?(s.preset?s.name:s.url):id}
+function render(){if(!snap)return;const p=snap.pool,a=p.active,mm={off:'выкл',reserve:'резерв',always:'только подписки'};
+ $('sum').innerHTML=[['Режим',mm[snap.mode]||snap.mode],['Сейчас трафик через',snap.via==='subs'?'подписку':snap.via==='mayak'?'свой сервер МАЯК':'—'],['Живых',p.alive+' из '+p.total],
+ ['Активный',a?esc(a.name||a.host)+' · '+esc(a.proto)+' · '+(a.delay_ms||'?')+' мс':'—'],['Выбор',p.selected?'вручную':'автоматически (лучший по задержке)'],['Последняя проверка',ago(p.last_run)]].map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join('');
+ $('prog').textContent=p.checking?('проверка… '+(p.progress||'')):'';$('auto').disabled=!p.selected;
+ const n=$('notice');if(p.notice){n.hidden=false;n.textContent='⚠ '+p.notice+' ('+ago(p.notice_at)+')'}else n.hidden=true;
+ let list=p.nodes||[];if($('onlyAlive').checked)list=list.filter(x=>x.ok);
+ $('nodes').innerHTML=list.map(x=>{const st=x.ok?(x.limited?'<span class="warn">жив, ограничен</span>':'<span class="ok">жив</span>'):(x.checked&&!x.checked.startsWith('0001')?'<span class="bad">мёртв</span>':'<span class="mut">не проверен</span>');
+  const flags=(x.active?'▶':'')+(x.selected?'✋':'')+(x.pinned?'★':'');const id=encodeURIComponent(x.id);
+  return `<tr class="${x.active?'act':''}"><td>${flags}</td><td class="nm" title="${esc(x.host+':'+x.port)}">${esc(x.name||x.host)}</td><td>${esc(x.proto)}·${esc(x.net)}·${esc(x.sec)}</td><td class="nm">${esc(srcName(x.source))}</td>
+  <td class="n">${x.tcp_ms?x.tcp_ms+' мс':'—'}</td><td class="n">${x.ok?x.delay_ms+' мс':'—'}</td><td class="n">${x.mbps?x.mbps.toFixed(1)+' Мбит/с':'—'}</td>
+  <td>${st}${x.err?`<div class="err" title="${esc(x.err)}">${esc(x.err)}</div>`:''}${x.fails?`<div class="mut">сбоев: ${x.fails}</div>`:''}</td><td class="mut">${ago(x.checked)}</td>
+  <td style="white-space:nowrap"><button class="btn sm" onclick="act('/api/subs/select?id=${id}')" ${x.selected?'disabled':''}>Выбрать</button>
+  <button class="btn sm" title="закрепить: проверяется всегда и стоит первым" onclick="act('/api/subs/pin?id=${id}&on=${x.pinned?0:1}')">${x.pinned?'☆':'★'}</button>
+  <button class="btn sm" title="замер скорости (до 3 МБ)" onclick="speed('${id}',this)">⚡</button></td></tr>`}).join('')||'<tr><td colspan="10" class="mut">серверов пока нет</td></tr>';
+ $('srcs').innerHTML=(p.sources||[]).filter(s=>s.enabled).map(s=>`<tr><td class="nm" title="${esc(s.preset?s.url:'')}">${esc(s.preset?s.name:s.url)}</td><td class="n">${s.count||0}${s.bad?` <span class="mut">(+${s.bad} не понял)</span>`:''}</td>
+  <td>${esc(Object.entries(s.mix||{}).map(([k,v])=>k+' '+v).join(', '))}</td><td>${ago(s.fetched)}</td><td>раз в ${esc(dur(s.refresh))}${s.update_hours?` <span class="mut">(подписка просит раз в ${s.update_hours} ч)</span>`:''}</td><td class="err" title="${esc(s.err)}">${esc(s.err)}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">нет включённых подписок</td></tr>';
+ if(cfg)effText()}
+async function speed(id,b){b.disabled=true;b.textContent='…';try{const r=await api('/api/subs/speed?id='+id,{method:'POST'});const j=await r.json();msg(j.ok?('скорость '+j.mbps.toFixed(1)+' Мбит/с'):('не вышло: '+(j.err||'')),j.ok)}catch(e){msg(String(e.message||e))}b.disabled=false;b.textContent='⚡';tick()}
+async function tick(){try{if(tab==='nodes'||tab==='subs'){const r=await api('/api/subs?all=1');if(r.ok){snap=await r.json();render()}}
+ if(tab==='log'&&$('follow').checked){const r=await api('/api/log?n=500');if(r.ok){const j=await r.json();const l=$('log');const bottom=l.scrollTop+l.clientHeight>=l.scrollHeight-20;l.textContent=(j.lines||[]).join('\n');if(bottom)l.scrollTop=l.scrollHeight}}}catch(e){}}
+function effText(){const d=cfg.defaults||{};const s=snap?.pool?.config;$('eff').textContent='Сейчас: подписки раз в '+dur(s?.refresh||d.refresh)+(s?.honor_update_interval?' (или чаще, если просит подписка)':'')+', живые раз в '+dur(s?.recheck||d.recheck)+', проверка через '+(s?.test_url||d.test_url)}
+async function loadCfg(){try{const r=await api('/api/subs/config');cfg=await r.json();$('urls').value=(cfg.urls||[]).join('\n');$('links').value=cfg.links||'';$('mode').value=cfg.mode||'';
+ const off=new Set(cfg.disabled||[]);$('presets').innerHTML=(cfg.presets||[]).map(p=>`<label class="ch"><input type="checkbox" data-id="${esc(p.id)}" ${off.has(p.id)?'':'checked'}> <span>${esc(p.name)}</span></label>`).join('');
+ $('refresh').value=cfg.refresh||'';$('recheck').value=cfg.recheck||'';$('testurl').value=cfg.test_url||'';$('honor').checked=!!cfg.honor_update_interval;
+ const d=cfg.defaults||{};$('refresh').placeholder=dur(d.refresh)+' (по умолчанию)';$('recheck').placeholder=dur(d.recheck)+' (по умолчанию)';$('testurl').placeholder=d.test_url||'';
+ $('path').textContent=cfg.path?('файл: '+cfg.path+(cfg.writable?'':' — только чтение!')+(cfg.extra_env?` · ещё ${cfg.extra_env} подписок задано переменной MAYAK_SUB`:'')):'файл настроек не задан (-sub-file) — сохранить нельзя';effText()}catch(e){msg(String(e.message||e))}}
+async function save(){if(!cfg)return;const body={urls:$('urls').value.split('\n').map(s=>s.trim()).filter(Boolean),links:$('links').value,
+ disabled:[...document.querySelectorAll('#presets input')].filter(i=>!i.checked).map(i=>i.dataset.id),mode:$('mode').value,
+ refresh:$('refresh').value.trim(),recheck:$('recheck').value.trim(),test_url:$('testurl').value.trim(),honor_update_interval:$('honor').checked};
+ try{const r=await api('/api/subs/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));
+ if(r.ok&&j.ok){msg('сохранено, подписки перечитаны — идёт проверка',true);loadCfg();setTimeout(tick,500)}else msg(j.err||('ошибка '+r.status))}catch(e){msg(String(e.message||e))}}
+function copyLog(){navigator.clipboard?.writeText($('log').textContent).then(()=>msg('скопировано',true),()=>msg('не удалось скопировать'))}
+(async()=>{try{const r=await fetch('/api/session',{credentials:'same-origin'});if(r.status===401){location='/login';return}const j=await r.json();CSRF=j.csrf||'';$('logout').hidden=!j.auth}catch(e){}
+ fetch('/api/stats',{credentials:'same-origin'}).then(r=>r.json()).then(j=>{if(j&&j.profile&&j.profile.name!=='direct')$('dash').hidden=false}).catch(()=>{});
+ const h=location.hash.slice(1);const hb=document.querySelector(`nav button[data-t="${h}"]`);if(hb)hb.click();else tick();setInterval(tick,3000)})();
+</script></body></html>

@@ -21,6 +21,8 @@ MAYAK (МАЯК, “lighthouse”) is an anti-censorship toolkit:
   `SHA256SUMS` is verified with an embedded ed25519 key, then the file by SHA-256.
   Windows/Linux replace the binary and restart themselves, Android downloads the APK and
   opens the system installer, OpenWrt has `mayak-update` (+ daily cron, `uci set mayak.main.auto_update=0` to disable);
+- **web panel** (0.3.4) at `/panel`: all subscription nodes with errors and latency, manual select/pin/speed test,
+  subscription editor (secrets masked), refresh/recheck periods, log; password + session cookie + CSRF when not on localhost;
 - **MikroTik RouterOS 7 containers** (0.3.3): ready `docker save` images for amd64/arm64/armv7
   (`mayak-container-{lite,full}-*.tar`), config via `MAYAK_<FLAG>` env vars, and a `-redirect`
   listener that takes router dst-nat'ed TCP 80/443 and recovers the target from TLS SNI / HTTP Host,
@@ -140,7 +142,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm    GOARM=7          go build -tags lite -tri
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-arm64            ./cmd/mayak
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-amd64            ./cmd/mayak
 # + полные mayak-linux-amd64 / mayak-linux-arm64 (с Xray) для пакетов mayak-full
-VER=0.3.3 BIN=./build OUT=./build openwrt/build-ipk.sh
+VER=0.3.4 BIN=./build OUT=./build openwrt/build-ipk.sh
 ```
 
 Получаются `mayak_<ver>_<arch>.ipk` (lite) для x86_64, aarch64_generic,
@@ -291,6 +293,8 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 Пакет `.ipk` или скрипт `openwrt/install-openwrt.sh` (рядом положите
 бинарник `mayak-lite-linux-<arch>` из Releases). Панель по умолчанию на
 **9091**, чтобы не спорить с Clash API на 9090, если рядом стоит podkop.
+Панель слушает все адреса, поэтому с 0.3.4 она под паролем: пароль лежит в
+`/etc/mayak-ui.pass` (`cat /etc/mayak-ui.pass`).
 
 Какой пакет: архитектура — `opkg print-architecture` (или `grep ARCH
 /etc/openwrt_release`). Обычный `mayak` — lite (~3–4 МБ в архиве, ~8–10 МБ на
@@ -300,9 +304,9 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 `install-openwrt.sh` с бинарником.
 
 ```sh
-scp -O mayak_0.3.3_x86_64.ipk root@192.168.1.1:/tmp/
+scp -O mayak_0.3.4_x86_64.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
-opkg install /tmp/mayak_0.3.3_x86_64.ipk
+opkg install /tmp/mayak_0.3.4_x86_64.ipk
 uci set mayak.main.link='mayak://KEY@YOUR_SERVER:443?…'
 uci set mayak.main.enabled=1
 uci commit mayak
@@ -426,6 +430,31 @@ Xray у 48 лучших. Второй тест — открывает ли вы�
 Встроенные пресеты — публичные бесплатные подписки (в том числе «белые»
 списки и [v2nodes](https://www.v2nodes.com/)). Их держат чужие люди и видят,
 куда вы ходите: не для банков и рабочих аккаунтов.
+
+С 0.3.4 периоды настраиваются: `-sub-refresh 6h`, `-sub-recheck 30m`,
+`-sub-test-url URL` (env `MAYAK_SUB_REFRESH`, `MAYAK_SUB_RECHECK`, `MAYAK_SUB_TEST_URL`)
+или поля `refresh`, `recheck`, `test_url` в `subs.json`. Применяются без перезапуска.
+Если подписка просит обновляться чаще (заголовок `profile-update-interval`, в часах),
+МАЯК так и делает, но не чаще раза в 15 минут. Отключается
+`"honor_update_interval": false` или `-sub-honor=false`.
+
+Сбой активного сервера: МАЯК сразу, вне очереди, проверяет его ещё 2 раза настоящим
+запросом. Если ни одна проверка не прошла, сервер выбывает и трафик уходит на
+следующий живой. Выбранный вручную сервер, когда он выбывает, сменяется
+автовыбором (это видно в журнале и панели). Если обновление подписки поменяло
+настройки активного сервера или убрало его, МАЯК сразу переходит на новые
+настройки или на следующий живой.
+
+### Веб-панель серверов (0.3.4)
+
+`http://<адрес панели>/panel` — вкладки «Узлы», «Подписки», «Настройки» и «Лог».
+На localhost пароль не нужен. На любом другом адресе нужен пароль:
+`-ui-pass` / `MAYAK_UI_PASS`, `-ui-pass-file`, или `/etc/mayak/ui.pass`. Если ничего
+не задано, МАЯК создаёт случайный пароль в `/data/ui.pass` (OpenWrt:
+`/etc/mayak-ui.pass`, иначе рядом с программой) и пишет в журнал только путь.
+Сессия хранится в cookie (HttpOnly, SameSite=Strict), все POST защищены от CSRF,
+после 5 неверных паролей вход временно блокируется. `-ui-tls` включает HTTPS с
+самоподписанным сертификатом.
 
 Необязательно, на сервере: `mayak picker` качает подписки, отбрасывает
 мёртвые и отдаёт готовую ленту `http://YOUR_SERVER/<секрет>/sub`.

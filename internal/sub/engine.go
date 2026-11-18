@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 
 	xlog "github.com/xtls/xray-core/common/log"
 	xnet "github.com/xtls/xray-core/common/net"
@@ -70,16 +71,22 @@ func NewEngine(ob map[string]any) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("конфиг: %w", err)
 	}
+	// core.New пишет глобальные настройки Xray (системный dialer) — по одному
+	newMu.Lock()
 	inst, err := core.New(pb)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		if err = inst.Start(); err != nil {
+			_ = inst.Close()
+		}
 	}
-	if err := inst.Start(); err != nil {
-		_ = inst.Close()
+	newMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	return &Engine{inst: inst}, nil
 }
+
+var newMu sync.Mutex
 
 // Dial открывает TCP до target (host:port) через сервер.
 func (e *Engine) Dial(ctx context.Context, target string) (net.Conn, error) {

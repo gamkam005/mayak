@@ -22,15 +22,38 @@ import (
 
 // subsFile — настройки подписок, которые пишет приложение (или руками):
 // {"disabled":["barryfar-vless"],"urls":["https://…"],"links":"vless://…"}
+// Периоды и проверка (панель пишет их сюда же): "refresh":"6h", "recheck":"30m",
+// "test_url":"http://…", "honor_update_interval":true — слушать просьбу подписки.
 type subsFile struct {
 	Disabled []string `json:"disabled"`
 	URLs     []string `json:"urls"`
 	Links    string   `json:"links"`
 	Mode     string   `json:"mode,omitempty"`
+	Refresh  string   `json:"refresh,omitempty"`
+	Recheck  string   `json:"recheck,omitempty"`
+	TestURL  string   `json:"test_url,omitempty"`
+	Honor    *bool    `json:"honor_update_interval,omitempty"`
 }
 
-func readSubsFile(path string, extra []string) (srcs []sub.Source, links, mode string) {
-	var f subsFile
+// poolConfig — настройки из файла поверх флагов/переменных (def).
+func poolConfig(f subsFile, def sub.Config) sub.Config {
+	c := def
+	if d, err := time.ParseDuration(f.Refresh); err == nil && d > 0 {
+		c.Refresh = d
+	}
+	if d, err := time.ParseDuration(f.Recheck); err == nil && d > 0 {
+		c.Recheck = d
+	}
+	if f.TestURL != "" {
+		c.TestURL = f.TestURL
+	}
+	if f.Honor != nil {
+		c.HonorInterval = *f.Honor
+	}
+	return c
+}
+
+func readSubsFile(path string, extra []string) (srcs []sub.Source, links string, f subsFile) {
 	if path != "" {
 		if b, err := os.ReadFile(path); err == nil {
 			_ = json.Unmarshal(b, &f)
@@ -57,7 +80,7 @@ func readSubsFile(path string, extra []string) (srcs []sub.Source, links, mode s
 		}
 		srcs = append(srcs, sub.Source{URL: u, Enabled: true})
 	}
-	return srcs, links + f.Links, f.Mode
+	return srcs, links + f.Links, f
 }
 
 // chain — куда отправлять «туннельный» трафик: свой сервер МАЯК, сервер из
@@ -185,7 +208,7 @@ func (ch *chain) health2s() string {
 }
 
 // subsAPI — ручки панели/приложения для подписок и живых настроек.
-func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speedURL string, logger *log.Logger) map[string]http.HandlerFunc {
+func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speedURL string, def sub.Config, logger *log.Logger) map[string]http.HandlerFunc {
 	js := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
@@ -204,7 +227,11 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 	return map[string]http.HandlerFunc{
 		"/api/subs": func(w http.ResponseWriter, r *http.Request) {
 			v, _ := ch.via.Load().(string)
-			js(w, map[string]any{"mode": ch.Mode(), "available": sub.Available, "mayak": ch.health2s(), "via": v, "pool": ch.pool.Snapshot()})
+			snap := ch.pool.Snapshot()
+			if r.URL.Query().Get("all") == "1" {
+				snap = ch.pool.SnapshotAll()
+			}
+			js(w, map[string]any{"mode": ch.Mode(), "available": sub.Available, "mayak": ch.health2s(), "via": v, "pool": snap})
 		},
 		"/api/subs/check": post(func(w http.ResponseWriter, r *http.Request) {
 			go func() { _ = ch.pool.Check(context.Background(), r.URL.Query().Get("refetch") == "1") }()
@@ -229,11 +256,7 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 			js(w, map[string]any{"ok": true, "mbps": mbps})
 		}),
 		"/api/subs/reload": post(func(w http.ResponseWriter, r *http.Request) {
-			srcs, links, mode := readSubsFile(subsPath, extra)
-			ch.pool.Reload(srcs, links)
-			if mode != "" {
-				ch.SetMode(mode)
-			}
+			applySubsFile(ch, subsPath, extra, def)
 			js(w, map[string]any{"ok": true})
 		}),
 		"/api/subs/mode": post(func(w http.ResponseWriter, r *http.Request) {
@@ -260,6 +283,16 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 			}
 			js(w, map[string]any{"ok": true, "strategies": list})
 		},
+	}
+}
+
+// applySubsFile — перечитать subs.json: подписки, режим, периоды.
+func applySubsFile(ch *chain, subsPath string, extra []string, def sub.Config) {
+	srcs, links, f := readSubsFile(subsPath, extra)
+	ch.pool.SetConfig(poolConfig(f, def))
+	ch.pool.Reload(srcs, links)
+	if f.Mode != "" {
+		ch.SetMode(f.Mode)
 	}
 }
 

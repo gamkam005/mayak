@@ -64,6 +64,7 @@ button.go:disabled{opacity:.5;cursor:wait}
   МАЯК<small>мозаичный туннель</small></div>
  <span id="state" class="pill">…</span>
  <div class="sp"></div>
+ <a class="pill" href="/panel" style="text-decoration:none;color:inherit">Серверы и подписки →</a>
  <button class="back" id="back" hidden onclick="Mayak.home()">← В приложение</button>
 </header>
 <div class="modebar"><div class="modes" id="modes">
@@ -95,6 +96,11 @@ button.go:disabled{opacity:.5;cursor:wait}
  </div>
 </main>
 <script>
+// вход по паролю: изменяющие запросы несут CSRF-токен сессии
+(()=>{let t='';const f=window.fetch.bind(window);
+const ready=f('/api/session',{credentials:'same-origin'}).then(r=>r.ok?r.json():{}).then(j=>{t=j.csrf||''}).catch(()=>{});
+window.fetch=(u,o={})=>{const m=(o.method||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return f(u,o).then(r=>{if(r.status===401)location='/login';return r});
+return ready.then(()=>{o.headers=Object.assign({},o.headers||{},{'X-CSRF-Token':t});o.credentials='same-origin';return f(u,o)}).then(r=>{if(r.status===401)location='/login';return r})}})();
 const $=id=>document.getElementById(id);
 const fmtB=b=>b>=1e9?(b/1e9).toFixed(2)+' ГБ':b>=1e6?(b/1e6).toFixed(1)+' МБ':b>=1e3?(b/1e3).toFixed(1)+' КБ':b+' Б';
 const mb=v=>(v*8/1e6);

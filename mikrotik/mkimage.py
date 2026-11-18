@@ -5,7 +5,7 @@
 Внутри: статический mayak, корневые сертификаты, пустые /etc/mayak и /data.
 Сборка воспроизводимая: одинаковые входы дают побайтно одинаковый tar.
 
-    mkimage.py -bin mayak-lite-linux-armv7 -arch arm/v7 -tag mayak:0.3.3-lite -o mayak-lite-armv7.tar
+    mkimage.py -bin mayak-lite-linux-armv7 -arch arm/v7 -tag mayak:0.3.4-lite -o mayak-lite-armv7.tar
 """
 import argparse, hashlib, io, json, os, tarfile
 

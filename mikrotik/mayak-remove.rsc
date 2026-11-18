@@ -1,10 +1,10 @@
 # МАЯК: полный откат — снимает перенаправление, останавливает и удаляет контейнер,
-# удаляет всё с comment=mayak. Файлы образа и папку mayak в Files не трогает.
+# удаляет всё с comment=mayak и mayak-panel. Файлы образа и папку mayak в Files не трогает.
 # Режим device-mode и пакет container остаются (их откат — см. README_RU.md).
 # Запуск: /import file-name=mayak-remove.rsc
 
-/ip firewall nat remove [find where comment="mayak"]
-/ip firewall filter remove [find where comment="mayak"]
+/ip firewall nat remove [find where comment="mayak" || comment="mayak-panel"]
+/ip firewall filter remove [find where comment="mayak" || comment="mayak-panel"]
 /ip firewall address-list remove [find where comment="mayak" && !dynamic]
 /ip dns static remove [find where comment="mayak"]
 :do { /ip firewall address-list remove [find where list="via-mayak" && dynamic] } on-error={}

@@ -41,6 +41,7 @@ type Options struct {
 	OpenURL       string        // "-" = не проверять
 	Refresh       time.Duration // перекачивать подписки (6 ч)
 	Recheck       time.Duration // перепроверять живых (30 мин)
+	HonorInterval bool          // слушать заголовок подписки profile-update-interval (не чаще MinRefresh)
 	Lazy          bool          // резервный режим: фоновые проверки, только если пулом пользовались за последний час
 	Logf          func(string, ...any)
 }
@@ -65,6 +66,9 @@ type sourceState struct {
 	Mix     map[string]int `json:"mix"`
 	Fetched time.Time      `json:"fetched"`
 	Err     string         `json:"err,omitempty"`
+	// UpdateHours — что просит сама подписка (profile-update-interval), Refresh — с каким периодом реально перекачиваем.
+	UpdateHours float64 `json:"update_hours,omitempty"`
+	Refresh     string  `json:"refresh,omitempty"`
 }
 
 // Pool — набор серверов из подписок с проверкой и автопереключением.
@@ -87,6 +91,15 @@ type Pool struct {
 	lastUse  atomic.Int64
 	kick     chan struct{}
 	progress atomic.Value // string
+
+	cfgMu     sync.RWMutex             // Refresh/Recheck/TestURL/HonorInterval меняются на лету
+	ivl       map[string]time.Duration // srcID → период из заголовка подписки
+	tried     map[string]time.Time     // srcID → последняя попытка скачать
+	verifying map[string]bool          // идёт внеочередная проверка сервера
+	verified  map[string]time.Time     // когда она закончилась
+	notice    string                   // заметка для панели (сброс ручного выбора и т. п.)
+	noticeAt  time.Time
+	probeFn   func(ctx context.Context, n *Node, testURL string, timeout time.Duration) (time.Duration, error)
 }
 
 type persisted struct {
@@ -95,6 +108,9 @@ type persisted struct {
 	Results  map[string]*Result `json:"results"`
 	Alive    []string           `json:"alive"`
 	LastFull time.Time          `json:"last_full"`
+	// Intervals — profile-update-interval подписок (часы), чтобы и после
+	// перезапуска кэш считался свежим по нужному периоду.
+	Intervals map[string]float64 `json:"intervals,omitempty"`
 }
 
 func New(opt Options) *Pool {
@@ -137,15 +153,19 @@ func New(opt Options) *Pool {
 	if opt.Fetch == nil {
 		opt.Fetch = &http.Client{Timeout: 30 * time.Second}
 	}
+	if opt.Refresh < MinRefresh {
+		opt.Refresh = MinRefresh
+	}
 	p := &Pool{opt: opt, nodes: map[string]*Node{}, res: map[string]*Result{}, pinned: map[string]bool{},
-		engines: map[string]*Engine{}, kick: make(chan struct{}, 1)}
+		engines: map[string]*Engine{}, kick: make(chan struct{}, 1),
+		ivl: map[string]time.Duration{}, tried: map[string]time.Time{}, verifying: map[string]bool{}, verified: map[string]time.Time{}}
 	p.progress.Store("")
 	p.setSources(opt.Sources)
 	p.load()
 	return p
 }
 
-var keyRe = regexp.MustCompile(`(?i)([?&](key|token|uuid|pass|password|auth|secret)=)[^&#\s]+`)
+var keyRe = regexp.MustCompile(`(?i)([?&](key|token|uuid|pass|password|auth|secret|obfs-password)=)[^&#\s]+`)
 
 // Mask — спрятать ключи в адресе подписки для журнала.
 // pathKeyRe — секрет в пути (/subs/<uuid>, /sub/<token>): длинный кусок пути, где цифр от 4.
@@ -236,6 +256,11 @@ func (p *Pool) load() {
 		p.res = st.Results
 	}
 	p.alive = st.Alive
+	for id, h := range st.Intervals {
+		if h > 0 {
+			p.ivl[id] = time.Duration(h * float64(time.Hour))
+		}
+	}
 }
 
 func (p *Pool) saveLocked() {
@@ -243,7 +268,10 @@ func (p *Pool) saveLocked() {
 	if f == "" {
 		return
 	}
-	st := persisted{Selected: p.selected, Results: map[string]*Result{}, Alive: p.alive, LastFull: p.lastFull}
+	st := persisted{Selected: p.selected, Results: map[string]*Result{}, Alive: p.alive, LastFull: p.lastFull, Intervals: map[string]float64{}}
+	for id, d := range p.ivl {
+		st.Intervals[id] = d.Hours()
+	}
 	for id := range p.pinned {
 		st.Pinned = append(st.Pinned, id)
 	}
@@ -262,16 +290,28 @@ func (p *Pool) saveLocked() {
 func (p *Pool) fetchOne(ctx context.Context, s *sourceState, force bool) string {
 	cache := p.path("src-" + srcID(s.URL) + ".txt")
 	if cache != "" && !force {
-		if fi, err := os.Stat(cache); err == nil && time.Since(fi.ModTime()) < p.opt.Refresh {
+		if fi, err := os.Stat(cache); err == nil && (time.Since(fi.ModTime()) < p.srcRefresh(s.ID) || p.triedRecently(s.ID)) {
 			if b, err := os.ReadFile(cache); err == nil {
+				p.mu.Lock()
 				s.Fetched = fi.ModTime()
+				p.mu.Unlock()
 				return string(b)
 			}
 		}
 	}
-	body, err := p.download(ctx, s.URL)
+	p.mu.Lock()
+	p.tried[s.ID] = time.Now()
+	p.mu.Unlock()
+	body, every, err := p.download(ctx, s.URL)
+	if every > 0 {
+		p.mu.Lock()
+		p.ivl[s.ID] = every
+		p.mu.Unlock()
+	}
 	if err != nil {
+		p.mu.Lock()
 		s.Err = err.Error()
+		p.mu.Unlock()
 		p.opt.Logf("подписка %s: %v", s.Name, err)
 		if cache != "" {
 			if b, err2 := os.ReadFile(cache); err2 == nil {
@@ -280,7 +320,9 @@ func (p *Pool) fetchOne(ctx context.Context, s *sourceState, force bool) string 
 		}
 		return ""
 	}
+	p.mu.Lock()
 	s.Err, s.Fetched = "", time.Now()
+	p.mu.Unlock()
 	if cache != "" {
 		_ = os.MkdirAll(p.opt.StateDir, 0o700)
 		_ = os.WriteFile(cache, []byte(body), 0o600)
@@ -288,7 +330,8 @@ func (p *Pool) fetchOne(ctx context.Context, s *sourceState, force bool) string 
 	return body
 }
 
-func (p *Pool) download(ctx context.Context, u string) (string, error) {
+func (p *Pool) download(ctx context.Context, u string) (string, time.Duration, error) {
+	var every time.Duration
 	get := func(cl *http.Client) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 		defer cancel()
@@ -305,12 +348,13 @@ func (p *Pool) download(ctx context.Context, u string) (string, error) {
 		if resp.StatusCode != 200 {
 			return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
+		every = parseUpdateInterval(resp.Header.Get("Profile-Update-Interval"))
 		b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		return string(b), err
 	}
 	body, err := get(p.opt.Fetch)
 	if err == nil {
-		return body, nil
+		return body, every, nil
 	}
 	// приёмы против DPI ломают рукопожатие с некоторыми серверами (сертификат
 	// «без имён») — пробуем обычное соединение
@@ -319,7 +363,7 @@ func (p *Pool) download(ctx context.Context, u string) (string, error) {
 		defer tr.CloseIdleConnections()
 		if b, err2 := get(&http.Client{Transport: tr, Timeout: 45 * time.Second}); err2 == nil {
 			p.opt.Logf("подписка %s скачана без приёмов против DPI", Mask(u))
-			return b, nil
+			return b, every, nil
 		}
 	}
 	// напрямую не вышло — через уже живой сервер из пула
@@ -328,10 +372,10 @@ func (p *Pool) download(ctx context.Context, u string) (string, error) {
 		defer tr.CloseIdleConnections()
 		if b, err2 := get(&http.Client{Transport: tr}); err2 == nil {
 			p.opt.Logf("подписка скачана через %s", id)
-			return b, nil
+			return b, every, nil
 		}
 	}
-	return "", err
+	return "", 0, err
 }
 
 // rebuild — собрать узлы из подписок (дубликаты убираются).
@@ -372,22 +416,19 @@ func (p *Pool) rebuild(ctx context.Context, force bool) {
 			continue
 		}
 		l, bad := ParseText(bodies[i])
-		s.Count, s.Bad, s.Mix = len(l), bad, map[string]int{}
+		mix := map[string]int{}
 		for _, n := range l {
-			s.Mix[n.Proto]++
+			mix[n.Proto]++
 		}
+		p.mu.Lock()
+		s.Count, s.Bad, s.Mix = len(l), bad, mix
+		p.mu.Unlock()
 		add(l, s.ID)
 	}
 	p.mu.Lock()
+	old := p.nodes
 	p.nodes, p.order = nodes, order
-	// живые, чьих узлов больше нет, — убрать
-	var alive []string
-	for _, id := range p.alive {
-		if nodes[id] != nil {
-			alive = append(alive, id)
-		}
-	}
-	p.alive = alive
+	p.remapLocked(old)
 	p.mu.Unlock()
 }
 
@@ -513,11 +554,30 @@ func pinCert(ctx context.Context, ob map[string]any, addr string) error {
 }
 
 // probeNode — задержка + проверка «открывает ли заблокированное».
-func (p *Pool) probeNode(ctx context.Context, n *Node, r *Result) {
+// extra — сколько раз переспросить сервер, если первый запрос не прошёл
+// (для тех, кто был живым: правило «сбой → ещё 2 проверки вне очереди»).
+func (p *Pool) probeNode(ctx context.Context, n *Node, r *Result, extra int) {
+	cfg := p.Config()
+	if p.probeFn != nil {
+		var err error
+		for i := 0; i <= extra; i++ {
+			var d time.Duration
+			if d, err = p.probeFn(ctx, n, cfg.TestURL, p.opt.ProbeTimeout); err == nil {
+				r.OK, r.Delay, r.Err = true, max(1, ms(d)), ""
+				return
+			}
+		}
+		r.Err = shortErr(err)
+		return
+	}
 	e, err := p.newEngine(ctx, n)
 	if err == nil {
 		var d time.Duration
-		d, err = probe(ctx, e, p.opt.TestURL, p.opt.ProbeTimeout)
+		for i := 0; i <= extra; i++ {
+			if d, err = probe(ctx, e, cfg.TestURL, p.opt.ProbeTimeout); err == nil {
+				break
+			}
+		}
 		if err == nil {
 			r.OK, r.Delay = true, max(1, ms(d))
 			if p.opt.OpenURL != "-" {
@@ -604,7 +664,7 @@ func (p *Pool) Check(ctx context.Context, refetch bool) error {
 		if n.UDPOnly() {
 			r.TCP = 0
 		}
-		p.probeNode(ctx, n, r)
+		p.probeNode(ctx, n, r, p.retries(n.ID))
 		p.mu.Lock()
 		if old := p.res[n.ID]; old != nil {
 			r.Speed = old.Speed
@@ -650,12 +710,15 @@ func (p *Pool) Recheck(ctx context.Context) {
 		n := p.nodes[ids[i]]
 		p.mu.Unlock()
 		r := &Result{ID: n.ID, Checked: time.Now()}
-		p.probeNode(ctx, n, r)
+		p.probeNode(ctx, n, r, p.retries(n.ID))
 		p.mu.Lock()
 		if old := p.res[n.ID]; old != nil {
 			r.TCP, r.Speed = old.TCP, old.Speed
 			if !r.OK {
 				r.Fails = old.Fails + 1
+				if old.OK {
+					p.opt.Logf("подписки: сервер %s выпал при перепроверке (и 2 повторные проверки без ответа: %s)", p.label(n.ID), r.Err)
+				}
 			}
 		}
 		p.res[n.ID] = r
@@ -703,6 +766,11 @@ func (p *Pool) rankLocked() {
 		alive = alive[:p.opt.Keep*3]
 	}
 	p.alive = alive
+	if id := p.selected; id != "" {
+		if r := p.res[id]; p.nodes[id] != nil && r != nil && !r.OK && !r.Checked.IsZero() {
+			p.dropSelectedLocked(fmt.Sprintf("выбранный вручную сервер %s не отвечает (%s)", p.label(id), r.Err))
+		}
+	}
 	keep := map[string]bool{}
 	for i, id := range alive {
 		if i < 3 || p.pinned[id] || id == p.selected {

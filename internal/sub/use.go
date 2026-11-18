@@ -3,6 +3,7 @@ package sub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -57,28 +58,69 @@ func (p *Pool) engine(id string) (*Engine, string) {
 	return e, id
 }
 
-// fail — неудача через сервер: после 3 подряд он выпадает из живых.
+// fail — неудача соединения через сервер. Правило: сразу, вне очереди, ещё
+// 2 настоящих запроса через сервер; если ни один не дал нормального ответа —
+// сервер выпадает (и трафик уходит на следующий живой), иначе остаётся.
 func (p *Pool) fail(id string, err error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	r := p.res[id]
 	if r == nil {
 		r = &Result{ID: id}
 		p.res[id] = r
 	}
 	r.Fails++
-	if r.Fails >= 3 && r.OK {
-		r.OK, r.Err, r.Checked = false, shortErr(err), time.Now()
-		p.opt.Logf("подписки: сервер %s выпал (%v)", id, err)
-		if p.active == id {
-			p.active = ""
+	n := p.nodes[id]
+	if n == nil || p.verifying[id] || time.Since(p.verified[id]) < verifyCooldown {
+		p.mu.Unlock()
+		return
+	}
+	p.verifying[id] = true
+	p.mu.Unlock()
+	go p.verify(id, n, err)
+}
+
+// verifyCooldown — не переспрашивать сервер чаще: он только что ответил.
+const verifyCooldown = 15 * time.Second
+
+func (p *Pool) verify(id string, n *Node, cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*p.opt.ProbeTimeout+10*time.Second)
+	defer cancel()
+	r := &Result{ID: id, Checked: time.Now()}
+	p.probeNode(ctx, n, r, 1) // ровно 2 запроса
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.verifying, id)
+	p.verified[id] = time.Now()
+	old := p.res[id]
+	if r.OK {
+		if old != nil {
+			old.OK, old.Delay, old.Err, old.Fails, old.Checked = true, r.Delay, "", 0, r.Checked
+		} else {
+			p.res[id] = r
 		}
-		p.rankLocked()
-		if len(p.alive) < 3 {
-			select {
-			case p.kick <- struct{}{}:
-			default:
-			}
+		return
+	}
+	if old == nil {
+		old = &Result{ID: id}
+		p.res[id] = old
+	}
+	wasOK := old.OK
+	old.OK, old.Err, old.Checked = false, r.Err, r.Checked
+	if wasOK || p.active == id || p.selected == id {
+		p.opt.Logf("подписки: сервер %s выпал: сбой (%s), 2 проверки вне очереди без ответа (%s)", p.label(id), shortErr(cause), r.Err)
+	}
+	if p.active == id {
+		p.active = ""
+	}
+	if p.selected == id {
+		p.dropSelectedLocked(fmt.Sprintf("выбранный вручную сервер %s не отвечает (%s)", p.label(id), r.Err))
+	}
+	p.rankLocked()
+	p.saveLocked()
+	if len(p.alive) < 3 {
+		select {
+		case p.kick <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -168,7 +210,7 @@ func (p *Pool) Run(ctx context.Context, firstDelay time.Duration) {
 	p.rebuild(ctx, false)
 	p.mu.Lock()
 	p.rankLocked()
-	fresh := len(p.alive) > 0 && time.Since(p.lastFull) < p.opt.Recheck
+	fresh := len(p.alive) > 0 && time.Since(p.lastFull) < p.Config().Recheck
 	p.mu.Unlock()
 	if !fresh {
 		select {
@@ -198,10 +240,12 @@ func (p *Pool) Run(ctx context.Context, firstDelay time.Duration) {
 			p.mu.Lock()
 			n, lastRun, lastFull := len(p.alive), p.lastRun, p.lastFull
 			p.mu.Unlock()
+			cfg := p.Config()
 			switch {
-			case n < 3 && time.Since(lastRun) > 5*time.Minute, time.Since(lastFull) > p.opt.Refresh:
-				_ = p.Check(ctx, time.Since(lastFull) > p.opt.Refresh)
-			case time.Since(lastRun) > p.opt.Recheck:
+			case n < 3 && time.Since(lastRun) > 5*time.Minute, time.Since(lastFull) > cfg.Refresh, p.sourcesDue():
+				// подписки, у которых истёк их период, перекачаются (fetchOne)
+				_ = p.Check(ctx, false)
+			case time.Since(lastRun) > cfg.Recheck:
 				p.Recheck(ctx)
 			}
 		}
@@ -221,8 +265,12 @@ func (p *Pool) closeAll() {
 func (p *Pool) Select(id string) {
 	p.mu.Lock()
 	p.selected = id
+	p.active = "" // и ручной выбор, и возврат к автовыбору — сразу на новый сервер
 	if id != "" {
-		p.active = ""
+		p.notice = ""
+		p.opt.Logf("подписки: выбран вручную %s", p.label(id))
+	} else {
+		p.opt.Logf("подписки: автовыбор сервера")
 	}
 	p.saveLocked()
 	p.mu.Unlock()
@@ -276,6 +324,9 @@ type NodeView struct {
 
 // Snapshot — состояние для панели и приложения.
 type Snapshot struct {
+	Notice   string        `json:"notice,omitempty"`
+	NoticeAt time.Time     `json:"notice_at,omitempty"`
+	Config   ConfigView    `json:"config"`
 	Total    int           `json:"total"`
 	Alive    int           `json:"alive"`
 	Active   *NodeView     `json:"active,omitempty"`
@@ -296,14 +347,25 @@ func (p *Pool) view(id string) NodeView {
 	return v
 }
 
-func (p *Pool) Snapshot() Snapshot {
+func (p *Pool) Snapshot() Snapshot { return p.snapshot(false) }
+
+// SnapshotAll — для панели: ещё и мёртвые/непроверенные (до 1000).
+func (p *Pool) SnapshotAll() Snapshot { return p.snapshot(true) }
+
+func (p *Pool) snapshot(all bool) Snapshot {
+	cfg := p.Config()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := Snapshot{Total: len(p.nodes), Alive: len(p.alive), Selected: p.selected, Checking: p.checking.Load(),
-		Progress: p.progress.Load().(string), LastRun: p.lastRun}
+		Progress: p.progress.Load().(string), LastRun: p.lastRun, Notice: p.notice, NoticeAt: p.noticeAt,
+		Config: cfg.view()}
 	for _, src := range p.srcs {
 		c := *src
 		c.URL = Mask(c.URL)
+		if d := p.ivl[c.ID]; d > 0 {
+			c.UpdateHours = d.Hours()
+		}
+		c.Refresh = p.srcRefreshLocked(c.ID, cfg).String()
 		s.Sources = append(s.Sources, c)
 	}
 	seen := map[string]bool{}
@@ -321,6 +383,22 @@ func (p *Pool) Snapshot() Snapshot {
 	}
 	if p.selected != "" {
 		add(p.selected)
+	}
+	if all {
+		for _, id := range p.order {
+			if len(s.Nodes) >= 1000 {
+				break
+			}
+			if p.res[id] != nil {
+				add(id)
+			}
+		}
+		for _, id := range p.order {
+			if len(s.Nodes) >= 1000 {
+				break
+			}
+			add(id)
+		}
 	}
 	if p.active != "" && p.nodes[p.active] != nil {
 		v := p.view(p.active)

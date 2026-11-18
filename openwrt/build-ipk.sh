@@ -2,7 +2,7 @@
 # Собирает mayak_<ver>_<arch>.ipk (lite, без Xray) и mayak-full_<ver>_<arch>.ipk (с Xray) (формат opkg: tar.gz с debian-binary, control.tar.gz, data.tar.gz).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-VER=${VER:-0.3.3}; BIN=${BIN:-$HERE/../build}; OUT=${OUT:-$HERE/../build}
+VER=${VER:-0.3.4}; BIN=${BIN:-$HERE/../build}; OUT=${OUT:-$HERE/../build}
 mkdir -p "$OUT"; BIN=$(cd "$BIN" && pwd); OUT=$(cd "$OUT" && pwd)
 cd "$HERE"
 build() { # opkg-arch go-suffix [full]

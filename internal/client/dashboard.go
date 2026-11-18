@@ -13,8 +13,18 @@ import (
 //go:embed web/index.html
 var indexHTML []byte
 
+// Middleware — обёртка панели (вход по паролю, CSRF); nil = без неё.
+type Middleware func(http.Handler) http.Handler
+
+func wrapMux(mux *http.ServeMux, mw Middleware) http.Handler {
+	if mw == nil {
+		return mux
+	}
+	return mw(mux)
+}
+
 // ServeDashboard — локальная панель: статус, скорость, режим, диагностика.
-func (c *Client) ServeDashboard(ctx context.Context, ln net.Listener, speedURL string) error {
+func (c *Client) ServeDashboard(ctx context.Context, ln net.Listener, speedURL string, mw Middleware) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -80,7 +90,7 @@ func (c *Client) ServeDashboard(ctx context.Context, ln net.Listener, speedURL s
 		}
 		writeJSON(w, c.Profile())
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: wrapMux(mux, mw), ReadHeaderTimeout: 10 * time.Second}
 	go func() { <-ctx.Done(); _ = srv.Close() }()
 	return srv.Serve(ln)
 }
@@ -93,12 +103,21 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 // ServeMini — панель для режима «только напрямую» (без сервера и туннеля):
 // /api/stats в том же виде, что у полной панели, и /api/route.
-func ServeMini(ctx context.Context, ln net.Listener, snap func() any, extra map[string]http.HandlerFunc) error {
+func ServeMini(ctx context.Context, ln net.Listener, snap func() any, extra map[string]http.HandlerFunc, mw Middleware) error {
 	mux := http.NewServeMux()
 	for p, h := range extra {
 		mux.HandleFunc(p, h)
 	}
+	_, hasPanel := extra["/panel"]
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if hasPanel {
+			http.Redirect(w, r, "/panel", http.StatusFound)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(miniHTML))
 	})
@@ -106,7 +125,7 @@ func ServeMini(ctx context.Context, ln net.Listener, snap func() any, extra map[
 		writeJSON(w, map[string]any{"profile": map[string]any{"name": "direct"}, "streams": 0, "route": snap()})
 	})
 	mux.HandleFunc("/api/route", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, snap()) })
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: wrapMux(mux, mw), ReadHeaderTimeout: 10 * time.Second}
 	go func() { <-ctx.Done(); _ = srv.Close() }()
 	return srv.Serve(ln)
 }

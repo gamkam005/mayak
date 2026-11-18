@@ -148,7 +148,28 @@ func New(opt Options) *Pool {
 var keyRe = regexp.MustCompile(`(?i)([?&](key|token|uuid|pass|password|auth|secret)=)[^&#\s]+`)
 
 // Mask — спрятать ключи в адресе подписки для журнала.
-func Mask(u string) string { return keyRe.ReplaceAllString(u, "${1}***") }
+// pathKeyRe — секрет в пути (/subs/<uuid>, /sub/<token>): длинный кусок пути, где цифр от 4.
+var pathKeyRe = regexp.MustCompile(`/[A-Za-z0-9_=-]{16,}`)
+
+func digits(s string) (n int) {
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n++
+		}
+	}
+	return n
+}
+
+// Mask прячет ключи подписки — и в параметрах, и в пути.
+func Mask(u string) string {
+	u = keyRe.ReplaceAllString(u, "${1}***")
+	return pathKeyRe.ReplaceAllStringFunc(u, func(m string) string {
+		if digits(m) < 4 {
+			return m
+		}
+		return "/***"
+	})
+}
 
 func srcID(u string) string {
 	h := sha1.Sum([]byte(u))
@@ -290,6 +311,16 @@ func (p *Pool) download(ctx context.Context, u string) (string, error) {
 	body, err := get(p.opt.Fetch)
 	if err == nil {
 		return body, nil
+	}
+	// приёмы против DPI ломают рукопожатие с некоторыми серверами (сертификат
+	// «без имён») — пробуем обычное соединение
+	if p.opt.Fetch != nil && p.opt.Fetch.Transport != nil {
+		tr := &http.Transport{TLSHandshakeTimeout: 15 * time.Second, ForceAttemptHTTP2: true}
+		defer tr.CloseIdleConnections()
+		if b, err2 := get(&http.Client{Transport: tr, Timeout: 45 * time.Second}); err2 == nil {
+			p.opt.Logf("подписка %s скачана без приёмов против DPI", Mask(u))
+			return b, nil
+		}
 	}
 	// напрямую не вышло — через уже живой сервер из пула
 	if e, id := p.engine(""); e != nil {

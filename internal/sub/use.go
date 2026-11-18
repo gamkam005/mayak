@@ -335,7 +335,9 @@ func (p *Pool) Links() []string {
 	defer p.mu.Unlock()
 	var out []string
 	for _, id := range p.alive {
-		out = append(out, p.nodes[id].Link)
+		if l := p.nodes[id].Link; l != "" { // узлы из Xray JSON ссылки не имеют
+			out = append(out, l)
+		}
 	}
 	return out
 }

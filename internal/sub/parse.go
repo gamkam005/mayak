@@ -43,10 +43,15 @@ func (n *Node) Addr() string { return net.JoinHostPort(n.Host, strconv.Itoa(n.Po
 
 var ErrUnsupported = errors.New("не поддерживается")
 
-// ParseText разбирает тело подписки: plain-ссылки по строкам, base64 целиком
-// или Clash YAML (proxies:). Возвращает узлы и число нераспознанных строк.
+// ParseText разбирает тело подписки: plain-ссылки по строкам, base64 целиком,
+// Clash YAML (proxies:) или готовые конфиги Xray в JSON (как отдают v2rayN/Happ). Возвращает узлы и число нераспознанных строк.
 func ParseText(body string) (nodes []Node, bad int) {
 	body = strings.TrimPrefix(strings.TrimSpace(body), "\ufeff")
+	if strings.HasPrefix(body, "[") || strings.HasPrefix(body, "{") {
+		if ns, b, ok := parseXrayJSON(body); ok {
+			return ns, b
+		}
+	}
 	if !strings.Contains(body, "://") {
 		if dec, ok := b64(strings.Join(strings.Fields(body), "")); ok && strings.Contains(dec, "://") {
 			body = dec

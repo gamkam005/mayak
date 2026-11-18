@@ -66,6 +66,7 @@ func runClient(args []string, auto bool) int {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	linkS := fs.String("link", "", "ссылка mayak://… (или файл с ней)")
 	listen := fs.String("listen", "127.0.0.1:1080", "локальный SOCKS5/HTTP-прокси")
+	redirect := fs.String("redirect", "", "приём соединений, перенаправленных роутером (dst-nat 80/443 → сюда): цель из SNI/Host, например 0.0.0.0:8443; пусто = выкл")
 	ui := fs.String("ui", "127.0.0.1:9090", "адрес панели (пусто = без панели)")
 	mode := fs.String("mode", "", "auto | mosaic | fast (перекрывает ссылку)")
 	budget := fs.Int("budget", 0, "байт на одно TLS-соединение в режиме mosaic (по умолчанию 14000)")
@@ -96,6 +97,10 @@ func runClient(args []string, auto bool) int {
 	sysproxy := fs.Bool("sysproxy", false, "Windows: включить системный прокси на время работы (при выходе вернуть как было)")
 	if args != nil {
 		_ = fs.Parse(args)
+	}
+	if err := envFlags(fs, os.LookupEnv); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 	if args == nil || *easy {
 		// двойной щелчок: всё, что нужно обычному человеку, без флагов
@@ -271,6 +276,22 @@ func runClient(args []string, auto bool) int {
 		go func() { _ = client.ServeProxyFunc(ctx, pl, h) }()
 		logger.Printf("МАЯК %s: без своего сервера, прокси SOCKS5/HTTP на %s, маршрут %s, подписки %s, приёмы: %s", version, pl.Addr(), *routeMode, ch.Mode(), *strat)
 	}
+	if *redirect != "" {
+		if rl, err := net.Listen("tcp", *redirect); err != nil {
+			logger.Printf("перенаправление: %v", err)
+		} else {
+			if c != nil {
+				go func() { _ = c.ServeRedirect(ctx, rl) }()
+			} else {
+				h := ch.Handle
+				if rt != nil {
+					h = rt.Handle
+				}
+				go func() { _ = client.ServeRedirect(ctx, rl, h) }()
+			}
+			logger.Printf("перенаправление: приём dst-nat на %s (цель из SNI/Host)", rl.Addr())
+		}
+	}
 	if *ui != "" {
 		ul, err := net.Listen("tcp", *ui)
 		if err != nil {
@@ -294,6 +315,25 @@ func runClient(args []string, auto bool) int {
 	}
 	<-ctx.Done()
 	return 0
+}
+
+// envFlags берёт незаданные в командной строке флаги из окружения: -link → MAYAK_LINK,
+// -sub-state → MAYAK_SUB_STATE и т. д. Нужно для контейнеров (RouterOS envlist, docker -e),
+// где удобнее задать переменные, чем переписывать команду. Флаги командной строки важнее.
+func envFlags(fs *flag.FlagSet, lookup func(string) (string, bool)) error {
+	var err error
+	fs.VisitAll(func(f *flag.Flag) {
+		if err != nil || flagSet(fs, f.Name) {
+			return
+		}
+		key := "MAYAK_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		if v, ok := lookup(key); ok && v != "" {
+			if e := fs.Set(f.Name, v); e != nil {
+				err = fmt.Errorf("%s: %w", key, e)
+			}
+		}
+	})
+	return err
 }
 
 func flagSet(fs *flag.FlagSet, name string) (set bool) {

@@ -20,7 +20,12 @@ MAYAK (МАЯК, “lighthouse”) is an anti-censorship toolkit:
 - **self-update** from the latest *stable* GitHub release (pre-releases, alpha/beta/rc are skipped):
   `SHA256SUMS` is verified with an embedded ed25519 key, then the file by SHA-256.
   Windows/Linux replace the binary and restart themselves, Android downloads the APK and
-  opens the system installer, OpenWrt has `mayak-update` (+ daily cron, `uci set mayak.main.auto_update=0` to disable).
+  opens the system installer, OpenWrt has `mayak-update` (+ daily cron, `uci set mayak.main.auto_update=0` to disable);
+- **MikroTik RouterOS 7 containers** (0.3.3): ready `docker save` images for amd64/arm64/armv7
+  (`mayak-container-{lite,full}-*.tar`), config via `MAYAK_<FLAG>` env vars, and a `-redirect`
+  listener that takes router dst-nat'ed TCP 80/443 and recovers the target from TLS SNI / HTTP Host,
+  so the router can send selected sites (DNS-driven address-list) or all web traffic through the tunnel.
+  See [`mikrotik/README_RU.md`](mikrotik/README_RU.md).
 
 Build the core with Go 1.27: `CGO_ENABLED=0 go build -trimpath -o mayak ./cmd/mayak`.
 Deploy the server with `scripts/install-server.sh` or the systemd unit below
@@ -135,7 +140,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm    GOARM=7          go build -tags lite -tri
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-arm64            ./cmd/mayak
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64                   go build -tags lite -trimpath -ldflags "$L" -o build/mayak-lite-linux-amd64            ./cmd/mayak
 # + полные mayak-linux-amd64 / mayak-linux-arm64 (с Xray) для пакетов mayak-full
-VER=0.3.2 BIN=./build OUT=./build openwrt/build-ipk.sh
+VER=0.3.3 BIN=./build OUT=./build openwrt/build-ipk.sh
 ```
 
 Получаются `mayak_<ver>_<arch>.ipk` (lite) для x86_64, aarch64_generic,
@@ -295,9 +300,9 @@ mayak://KEY@YOUR_SERVER:443?fp=chrome&mode=auto&sni=example.com&pin=sha256-…#M
 `install-openwrt.sh` с бинарником.
 
 ```sh
-scp -O mayak_0.3.2_x86_64.ipk root@192.168.1.1:/tmp/
+scp -O mayak_0.3.3_x86_64.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
-opkg install /tmp/mayak_0.3.2_x86_64.ipk
+opkg install /tmp/mayak_0.3.3_x86_64.ipk
 uci set mayak.main.link='mayak://KEY@YOUR_SERVER:443?…'
 uci set mayak.main.enabled=1
 uci commit mayak
@@ -322,6 +327,26 @@ logread -e mayak
 Перед правкой конфига podkop сделайте копию:
 `cp /etc/config/podkop /etc/config/podkop.bak-$(date +%F)`.
 После `podkop restart` трафик прервётся примерно на 5–15 секунд.
+
+### MikroTik (RouterOS 7, контейнер)
+
+С 0.3.3 МАЯК запускается прямо на MikroTik, в контейнере RouterOS, без OpenWrt.
+В релизе есть готовые образы `mayak-container-{lite,full}-{amd64,arm64,armv7}.tar`
+(формат `docker save`, подходят и для docker/podman). Сборка из исходников:
+`mikrotik/build-images.sh`. Для RB4011 нужен `armv7`.
+
+Роутер отправляет в контейнер (dst-nat) TCP 80/443 к выбранным сайтам или весь
+веб-трафик LAN. Новый приёмник `-redirect` (в образе — порт 8443) берёт имя сайта
+из SNI/Host и ведёт соединение через туннель. Список сайтов наполняет сам DNS
+роутера (`/ip dns static … type=FWD match-subdomain=yes address-list=via-mayak`).
+
+Пошаговая инструкция для RB4011 (device-mode, файлы, два режима, откат) и
+готовые скрипты `mayak-install.rsc`, `mayak-route-list.rsc`,
+`mayak-route-all.rsc`, `mayak-remove.rsc` лежат в [`mikrotik/`](mikrotik/README_RU.md).
+Всё проверено на RouterOS 7.25.1 (CHR).
+
+Любой флаг `mayak client` можно задать переменной окружения `MAYAK_<ФЛАГ>`
+(`-sub-state` → `MAYAK_SUB_STATE`); флаги командной строки важнее.
 
 ## Благодарности
 

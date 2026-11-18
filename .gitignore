@@ -47,3 +47,7 @@ Thumbs.db
 /android-sdk/
 /jdk/
 /ndk/
+
+# Container images
+/mikrotik/out/
+mayak-container-*.tar

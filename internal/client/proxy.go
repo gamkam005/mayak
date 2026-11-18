@@ -20,6 +20,11 @@ func (c *Client) ServeProxy(ctx context.Context, ln net.Listener) error {
 	return ServeProxyFunc(ctx, ln, c.openRouted)
 }
 
+// ServeRedirect — приём перенаправленных роутером соединений (см. ServeRedirect).
+func (c *Client) ServeRedirect(ctx context.Context, ln net.Listener) error {
+	return ServeRedirect(ctx, ln, c.openRouted)
+}
+
 // OpenFunc связывает принятое соединение приложения с целью "host:port".
 type OpenFunc func(conn net.Conn, target string)
 

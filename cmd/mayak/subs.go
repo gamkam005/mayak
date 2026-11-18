@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mayak/internal/asn"
 	"mayak/internal/client"
 	"mayak/internal/desync"
 	"mayak/internal/route"
@@ -33,6 +34,8 @@ type subsFile struct {
 	Recheck  string   `json:"recheck,omitempty"`
 	TestURL  string   `json:"test_url,omitempty"`
 	Honor    *bool    `json:"honor_update_interval,omitempty"`
+	// Budget — размер плитки mosaic своего сервера, байт (0 = из -budget/ссылки, 14000).
+	Budget int `json:"budget,omitempty"`
 }
 
 // poolConfig — настройки из файла поверх флагов/переменных (def).
@@ -94,6 +97,75 @@ type chain struct {
 	started sync.Once
 	ctx     context.Context
 	logf    func(string, ...any)
+	// defBudget — размер плитки из -budget / MAYAK_BUDGET / ссылки (без subs.json)
+	defBudget int
+	lookup    func(ctx context.Context, host string) ([]net.IP, error)
+}
+
+// applyBudget — размер плитки: subs.json важнее флага/переменной/ссылки.
+func (ch *chain) applyBudget(f subsFile) {
+	if ch.c == nil {
+		return
+	}
+	if f.Budget > 0 {
+		ch.c.SetBudget(f.Budget, "настройки панели")
+	} else if ch.defBudget > 0 {
+		ch.c.SetBudget(ch.defBudget, "по умолчанию")
+	}
+}
+
+// ownIP — фактический адрес своего сервера.
+func (ch *chain) ownIP(ctx context.Context) string {
+	if ch.c == nil {
+		return ""
+	}
+	h, _, err := net.SplitHostPort(ch.c.ServerAddr())
+	if err != nil {
+		return ""
+	}
+	if net.ParseIP(h) != nil || ch.lookup == nil {
+		return h
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	ips, err := ch.lookup(ctx, h)
+	if err != nil || len(ips) == 0 {
+		return ""
+	}
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip.String()
+		}
+	}
+	return ips[0].String()
+}
+
+// ownView — свой сервер для панели: адрес, AS, последняя проба «заморозки».
+func (ch *chain) ownView(ctx context.Context) map[string]any {
+	if ch.c == nil {
+		return map[string]any{"present": false}
+	}
+	ip := ch.ownIP(ctx)
+	p := ch.c.Profile()
+	return map[string]any{"present": true, "ip": ip, "as": asn.LookupString(ip), "health": ch.health2s(),
+		"probe": ch.c.LastProbe(), "profile": p.Name, "tile": p.Budget, "budget": ch.c.Budget(), "budget_default": ch.defBudget}
+}
+
+// recordOwnProbe — проба своего сервера → история тестов (отдельно от узлов подписок).
+func (ch *chain) recordOwnProbe(r client.FreezeResult) {
+	ip := ch.ownIP(context.Background())
+	in := asn.LookupString(ip)
+	class := sub.StatusWorking
+	switch {
+	case r.Frozen:
+		class = sub.StatusFrozen
+	case r.Err != "":
+		class = sub.StatusDead
+	case r.Body < r.Target:
+		class = sub.StatusSlow
+	}
+	ch.pool.AddHistory(sub.HistEntry{DL: sub.DL{At: r.At, Target: r.Target, Bytes: r.Body, StallMs: int(r.StallMs), TotalMs: int(r.Duration.Milliseconds()), Mbps: r.Mbps,
+		Stalled: r.Frozen, Err: r.Err, Class: class}, Node: "own", Name: "свой сервер МАЯК", IP: ip, ASN: in.ASN, Kind: "own"})
 }
 
 func (ch *chain) Mode() string { return ch.mode.Load().(string) }
@@ -246,14 +318,39 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 			js(w, map[string]any{"ok": true})
 		}),
 		"/api/subs/speed": post(func(w http.ResponseWriter, r *http.Request) {
-			ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+			ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 			defer cancel()
-			mbps, err := ch.pool.Speed(ctx, r.URL.Query().Get("id"), speedURL)
+			d, err := ch.pool.SpeedTest(ctx, r.URL.Query().Get("id"), speedURL, sub.FreezeLarge)
 			if err != nil {
 				js(w, map[string]any{"ok": false, "err": err.Error()})
 				return
 			}
-			js(w, map[string]any{"ok": true, "mbps": mbps})
+			if d.Bytes == 0 {
+				js(w, map[string]any{"ok": false, "err": d.Err, "dl": d})
+				return
+			}
+			js(w, map[string]any{"ok": true, "mbps": d.Mbps, "dl": d})
+		}),
+		// история тестов загрузки (узлы подписок и свой сервер): GET ?n=200
+		"/api/subs/history": func(w http.ResponseWriter, r *http.Request) {
+			n := 200
+			_, _ = fmt.Sscan(r.URL.Query().Get("n"), &n)
+			js(w, map[string]any{"history": ch.pool.History(n)})
+		},
+		// свой сервер МАЯК: адрес, AS, последняя проба «заморозки», плитка
+		"/api/own": func(w http.ResponseWriter, r *http.Request) {
+			js(w, ch.ownView(r.Context()))
+		},
+		// проба «заморозки» своего сервера по кнопке: 256 КБ одним соединением
+		"/api/own/probe": post(func(w http.ResponseWriter, r *http.Request) {
+			if ch.c == nil {
+				js(w, map[string]any{"ok": false, "err": "своего сервера нет (только подписки)"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+			defer cancel()
+			res := ch.c.ProbeFreeze(ctx, 256<<10)
+			js(w, map[string]any{"ok": res.Err == "" || res.Frozen, "probe": res})
 		}),
 		"/api/subs/reload": post(func(w http.ResponseWriter, r *http.Request) {
 			applySubsFile(ch, subsPath, extra, def)
@@ -290,6 +387,7 @@ func subsAPI(ch *chain, rt *route.Router, subsPath string, extra []string, speed
 func applySubsFile(ch *chain, subsPath string, extra []string, def sub.Config) {
 	srcs, links, f := readSubsFile(subsPath, extra)
 	ch.pool.SetConfig(poolConfig(f, def))
+	ch.applyBudget(f)
 	ch.pool.Reload(srcs, links)
 	if f.Mode != "" {
 		ch.SetMode(f.Mode)
@@ -309,8 +407,8 @@ func defaultSubsState() string {
 	return ""
 }
 
-func newPool(state string, srcs []sub.Source, links string, maxC int, lookup func(context.Context, string) ([]net.IP, error), fetchDial func(ctx context.Context, network, addr string) (net.Conn, error), logf func(string, ...any)) *sub.Pool {
+func newPool(state, freezeURL string, srcs []sub.Source, links string, maxC int, lookup func(context.Context, string) ([]net.IP, error), fetchDial func(ctx context.Context, network, addr string) (net.Conn, error), logf func(string, ...any)) *sub.Pool {
 	tr := &http.Transport{DialContext: fetchDial, TLSHandshakeTimeout: 15 * time.Second, ForceAttemptHTTP2: true}
-	return sub.New(sub.Options{StateDir: state, Sources: srcs, Links: links, Lookup: lookup, MaxCandidates: maxC,
+	return sub.New(sub.Options{StateDir: state, FreezeURL: freezeURL, Sources: srcs, Links: links, Lookup: lookup, MaxCandidates: maxC,
 		Fetch: &http.Client{Transport: tr, Timeout: 45 * time.Second}, Logf: func(f string, a ...any) { logf(sub.Mask(fmt.Sprintf(f, a...))) }})
 }

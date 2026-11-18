@@ -17,14 +17,65 @@ type FreezeResult struct {
 	Frozen   bool          `json:"frozen"`    // поток замер
 	Duration time.Duration `json:"duration_ns"`
 	Err      string        `json:"err,omitempty"`
+	At       time.Time     `json:"at"`
+	StallMs  int64         `json:"stall_ms,omitempty"` // когда пришёл последний байт (если замер)
+	Mbps     float64       `json:"mbps,omitempty"`
 }
+
+// LastProbe — последняя проба «заморозки» своего сервера (nil — не было).
+func (c *Client) LastProbe() *FreezeResult {
+	c.probeMu.Lock()
+	defer c.probeMu.Unlock()
+	if c.lastProbe == nil {
+		return nil
+	}
+	r := *c.lastProbe
+	return &r
+}
+
+// SetProbeHook — кому сообщать итог каждой пробы (история тестов).
+func (c *Client) SetProbeHook(f func(FreezeResult)) {
+	c.probeMu.Lock()
+	c.probeHook = f
+	c.probeMu.Unlock()
+}
+
+// ServerAddr — host:port своего сервера.
+func (c *Client) ServerAddr() string { return c.opt.Server }
 
 // ProbeFreeze скачивает начало «бандла» сайта-заглушки по ОДНОМУ
 // TLS-соединению. Если поток замирает — у провайдера работает
 // ограничение по объёму на соединение, и нужна «мозаика».
+// Это проба СВОЕГО сервера: она выбирает fast/mosaic для туннеля МАЯК и не
+// влияет на оценку узлов из подписок (у тех свой тест загрузки, sub.dlTest).
 func (c *Client) ProbeFreeze(ctx context.Context, want int64) FreezeResult {
+	res := c.probeFreeze(ctx, want)
+	if res.Frozen && res.Duration > 5*time.Second {
+		res.StallMs = (res.Duration - 5*time.Second).Milliseconds()
+	}
+	if s := res.Duration.Seconds(); s > 0 && res.Body > 0 {
+		end := s
+		if res.StallMs > 0 {
+			end = float64(res.StallMs) / 1000
+		}
+		if end > 0 {
+			res.Mbps = float64(res.Body) * 8 / 1e6 / end
+		}
+	}
+	c.probeMu.Lock()
+	r := res
+	c.lastProbe = &r
+	hook := c.probeHook
+	c.probeMu.Unlock()
+	if hook != nil {
+		hook(res)
+	}
+	return res
+}
+
+func (c *Client) probeFreeze(ctx context.Context, want int64) FreezeResult {
 	t0 := time.Now()
-	res := FreezeResult{Target: want}
+	res := FreezeResult{Target: want, At: t0}
 	l, err := c.dial(ctx)
 	if err != nil {
 		res.Err = err.Error()
@@ -62,7 +113,7 @@ func (c *Client) autoLoop(ctx context.Context) {
 		r := c.ProbeFreeze(ctx, 256<<10)
 		switch {
 		case r.Frozen:
-			budget := c.opt.Budget
+			budget := c.Budget()
 			// подстраиваемся под реальный порог: 75% от того, что успело пройти
 			if b := int(float64(r.Bytes) * 0.75); b < budget {
 				budget = b

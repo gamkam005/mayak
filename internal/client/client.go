@@ -74,6 +74,12 @@ type Client struct {
 	key  []byte
 	pin  []byte
 	prof atomic.Pointer[Profile]
+	// budget — размер плитки mosaic; меняется на лету из панели (0.3.5)
+	budget atomic.Int64
+	// последняя проба «заморозки» своего сервера и кому о ней сообщить
+	probeMu   sync.Mutex
+	lastProbe *FreezeResult
+	probeHook func(FreezeResult)
 
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -137,6 +143,7 @@ func New(opt Options) (*Client, error) {
 		}
 		c.pin = p
 	}
+	c.budget.Store(int64(opt.Budget))
 	c.cond = sync.NewCond(&c.mu)
 	c.sid = protocol.NewSessionID()
 	c.events = newEventLog(80)
@@ -152,6 +159,24 @@ func New(opt Options) (*Client, error) {
 }
 
 func (c *Client) Profile() Profile { return *c.prof.Load() }
+
+// Budget — текущий размер плитки mosaic (байт на одно TLS-соединение).
+func (c *Client) Budget() int { return int(c.budget.Load()) }
+
+// SetBudget — новый размер плитки без перезапуска (из панели/subs.json).
+// Если сейчас mosaic — сразу переходит на новый размер.
+func (c *Client) SetBudget(n int, why string) {
+	if n < 4000 {
+		n = 4000
+	}
+	if int(c.budget.Swap(int64(n))) == n {
+		return
+	}
+	c.events.add("mode", fmt.Sprintf("размер плитки по умолчанию: %d байт (%s)", n, why))
+	if p := c.Profile(); p.Name == "mosaic" {
+		c.setProfile(mosaicProfile(n), why)
+	}
+}
 
 func (c *Client) setProfile(p Profile, why string) {
 	old := c.prof.Load()
@@ -553,7 +578,7 @@ func (c *Client) downWorker(ctx context.Context, idx int) {
 			w.retire()
 			c.legError(err)
 			if errors.Is(err, errStall) && p.Budget == 0 {
-				c.setProfile(mosaicProfile(c.opt.Budget), "поток замер посреди ответа — похоже на «заморозку 16 КБ»")
+				c.setProfile(mosaicProfile(c.Budget()), "поток замер посреди ответа — похоже на «заморозку 16 КБ»")
 			}
 			fails++
 			sleepCtx(ctx, backoff(fails))

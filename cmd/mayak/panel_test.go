@@ -278,3 +278,15 @@ func TestPanelConfigSave(t *testing.T) {
 		t.Error("ошибочный запрос не должен менять файл")
 	}
 }
+
+func TestValidateBudget(t *testing.T) {
+	for _, c := range []struct {
+		b  int
+		ok bool
+	}{{0, true}, {8000, true}, {14000, true}, {3000, false}, {70000, false}} {
+		err := validateSubsFile(&subsFile{Budget: c.b})
+		if (err == nil) != c.ok {
+			t.Errorf("budget %d: %v", c.b, err)
+		}
+	}
+}

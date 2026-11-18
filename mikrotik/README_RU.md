@@ -130,7 +130,7 @@ scp link.txt admin@192.168.88.1:/mayak/link.txt
 /log print where topics~"container"
 ```
 
-В журнале должно быть `МАЯК 0.3.4: прокси SOCKS5/HTTP на [::]:1080 …` и
+В журнале должно быть `МАЯК 0.3.5: прокси SOCKS5/HTTP на [::]:1080 …` и
 `перенаправление: приём dst-nat на [::]:8443`.
 
 Уже сейчас из LAN работают:
@@ -303,7 +303,7 @@ match-subdomain=yes address-list=via-mayak`. Когда устройство в 
 ```
 OUT=./out mikrotik/build-images.sh      # шесть образов: {lite,full}×{amd64,arm64,armv7}
 docker load -i out/mayak-container-full-amd64.tar     # тот же tar подходит docker/podman
-docker run -d -p 1080:1080 -p 9090:9090 -v $PWD/link.txt:/etc/mayak/link.txt:ro mayak:0.3.4-full
+docker run -d -p 1080:1080 -p 9090:9090 -v $PWD/link.txt:/etc/mayak/link.txt:ro mayak:0.3.5-full
 ```
 
 Настройки контейнера задаются переменными окружения `MAYAK_<ФЛАГ>` (любой флаг
@@ -312,3 +312,7 @@ docker run -d -p 1080:1080 -p 9090:9090 -v $PWD/link.txt:/etc/mayak/link.txt:ro 
 `MAYAK_LISTEN=0.0.0.0:1080`, `MAYAK_UI=0.0.0.0:9090`, `MAYAK_REDIRECT=0.0.0.0:8443`,
 `MAYAK_NOUPDATE=true` (образ обновляется заменой tar, а не сам),
 `MAYAK_SUB_STATE=/data/subs`.
+
+С 0.3.5 полезны для опытов: `MAYAK_BUDGET=8000` (плитка mosaic своего сервера,
+по умолчанию 14000; то же поле есть в настройках панели) и
+`MAYAK_SUB_FREEZE_URL=-` (выключить тест загрузки 256 КБ через узлы подписок).

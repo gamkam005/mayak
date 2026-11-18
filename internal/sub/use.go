@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"mayak/internal/asn"
 )
 
 // engine — движок для узла id ("" = текущий: ручной выбор или лучший живой).
@@ -86,7 +88,7 @@ func (p *Pool) verify(id string, n *Node, cause error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*p.opt.ProbeTimeout+10*time.Second)
 	defer cancel()
 	r := &Result{ID: id, Checked: time.Now()}
-	p.probeNode(ctx, n, r, 1) // ровно 2 запроса
+	p.probeNode(ctx, n, r, 1, true) // ровно 2 запроса (и 2 загрузки, если первая встала)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.verifying, id)
@@ -95,9 +97,18 @@ func (p *Pool) verify(id string, n *Node, cause error) {
 	if r.OK {
 		if old != nil {
 			old.OK, old.Delay, old.Err, old.Fails, old.Checked = true, r.Delay, "", 0, r.Checked
+			old.IP, old.Info = r.IP, r.Info
+			if r.DL != nil {
+				old.DL = r.DL
+			}
+			old.Status = statusOf(old)
 		} else {
 			p.res[id] = r
 		}
+		if r.Status == StatusFrozen {
+			p.rankLocked() // замороженный уходит в конец, трафик — на рабочий
+		}
+		p.saveLocked()
 		return
 	}
 	if old == nil {
@@ -106,6 +117,7 @@ func (p *Pool) verify(id string, n *Node, cause error) {
 	}
 	wasOK := old.OK
 	old.OK, old.Err, old.Checked = false, r.Err, r.Checked
+	old.Status = statusOf(old)
 	if wasOK || p.active == id || p.selected == id {
 		p.opt.Logf("подписки: сервер %s выпал: сбой (%s), 2 проверки вне очереди без ответа (%s)", p.label(id), shortErr(cause), r.Err)
 	}
@@ -289,28 +301,63 @@ func (p *Pool) Pin(id string, on bool) {
 	p.mu.Unlock()
 }
 
-// Speed — быстрый замер скорости через сервер id (по кнопке).
+// Speed — замер скорости через сервер id (по кнопке): загрузка до 3 МБ одним
+// соединением; заодно обновляет статус загрузки (качает/медленный/заморожен).
 func (p *Pool) Speed(ctx context.Context, id, url string) (float64, error) {
+	d, err := p.SpeedTest(ctx, id, url, FreezeLarge)
+	if err != nil {
+		return 0, err
+	}
+	if d.Bytes == 0 {
+		return 0, errors.New(d.Err)
+	}
+	return d.Mbps, nil
+}
+
+// SpeedTest — то же с полным итогом.
+func (p *Pool) SpeedTest(ctx context.Context, id, url string, target int64) (DL, error) {
 	p.mu.Lock()
 	n := p.nodes[id]
 	p.mu.Unlock()
 	if n == nil {
-		return 0, errors.New("нет такого сервера")
+		return DL{}, errors.New("нет такого сервера")
 	}
-	e, err := p.newEngine(ctx, n)
-	if err != nil {
-		return 0, err
-	}
-	defer e.Close()
-	mbps, _, err := SpeedTest(ctx, e, url, 3<<20, 20*time.Second)
-	if err == nil {
+	var d DL
+	ip := p.resolve(ctx, n.Host)
+	if p.dlFn != nil {
+		d = p.dlFn(ctx, n, target)
+	} else {
+		e, err := p.newEngine(ctx, n)
+		if err != nil {
+			return DL{}, err
+		}
+		defer e.Close()
+		if url == "" {
+			url = freezeURL(p.opt.FreezeURL, target)
+		}
+		var delay time.Duration
 		p.mu.Lock()
 		if r := p.res[id]; r != nil {
-			r.Speed = mbps
+			delay = time.Duration(r.Delay) * time.Millisecond
 		}
 		p.mu.Unlock()
+		fw := firstWait(delay)
+		d = dlTest(ctx, e.Dial, url, target, stallTimeout, fw, fw+15*time.Second)
 	}
-	return mbps, err
+	in := asn.LookupString(ip)
+	p.mu.Lock()
+	if r := p.res[id]; r != nil {
+		if d.Mbps > 0 {
+			r.Speed = d.Mbps
+		}
+		r.DL, r.IP, r.Info = &d, ip, in
+		r.Status = statusOf(r)
+		p.rankLocked()
+	}
+	p.addHistLocked(HistEntry{DL: d, Node: id, Name: n.Name, IP: ip, ASN: in.ASN, Kind: "button"})
+	p.saveLocked()
+	p.mu.Unlock()
+	return d, nil
 }
 
 // NodeView — для панели.
@@ -329,6 +376,10 @@ type Snapshot struct {
 	Config   ConfigView    `json:"config"`
 	Total    int           `json:"total"`
 	Alive    int           `json:"alive"`
+	Working  int           `json:"working"` // из живых: загрузка 256 КБ прошла
+	Slow     int           `json:"slow"`
+	Frozen   int           `json:"frozen"`
+	Untested int           `json:"untested"` // живые без теста загрузки
 	Active   *NodeView     `json:"active,omitempty"`
 	Selected string        `json:"selected"`
 	Checking bool          `json:"checking"`
@@ -359,6 +410,18 @@ func (p *Pool) snapshot(all bool) Snapshot {
 	s := Snapshot{Total: len(p.nodes), Alive: len(p.alive), Selected: p.selected, Checking: p.checking.Load(),
 		Progress: p.progress.Load().(string), LastRun: p.lastRun, Notice: p.notice, NoticeAt: p.noticeAt,
 		Config: cfg.view()}
+	for _, id := range p.alive {
+		switch p.res[id].Status {
+		case StatusWorking:
+			s.Working++
+		case StatusSlow:
+			s.Slow++
+		case StatusFrozen:
+			s.Frozen++
+		default:
+			s.Untested++
+		}
+	}
 	for _, src := range p.srcs {
 		c := *src
 		c.URL = Mask(c.URL)

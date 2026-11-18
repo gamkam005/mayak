@@ -484,6 +484,7 @@ type subsConfigView struct {
 	Recheck  string         `json:"recheck"`
 	TestURL  string         `json:"test_url"`
 	Honor    bool           `json:"honor_update_interval"`
+	Budget   int            `json:"budget"`
 	Presets  []presetView   `json:"presets"`
 	Defaults sub.ConfigView `json:"defaults"`
 	Extra    int            `json:"extra_env"` // подписок из -sub / MAYAK_SUB (в файле их нет)
@@ -572,6 +573,9 @@ func validateSubsFile(f *subsFile) error {
 	if err := check("перепроверка живых", f.Recheck, 5*time.Minute, 24*time.Hour); err != nil {
 		return err
 	}
+	if f.Budget != 0 && (f.Budget < 4000 || f.Budget > 65536) {
+		return fmt.Errorf("размер плитки mosaic: %d — допустимо от 4000 до 65536 байт (пусто — по умолчанию)", f.Budget)
+	}
 	if f.TestURL != "" {
 		u, err := url.Parse(f.TestURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -654,7 +658,7 @@ func panelAPI(subsPath string, extra []string, def sub.Config, ring *logRing, ap
 			}
 			if r.Method == http.MethodGet {
 				v := subsConfigView{Path: subsPath, Links: maskLinks(f.Links), Disabled: f.Disabled, Mode: f.Mode,
-					Refresh: f.Refresh, Recheck: f.Recheck, TestURL: f.TestURL, Honor: f.Honor == nil || *f.Honor,
+					Refresh: f.Refresh, Recheck: f.Recheck, TestURL: f.TestURL, Honor: f.Honor == nil || *f.Honor, Budget: f.Budget,
 					Defaults: def.ViewOf(), Extra: nExtra}
 				if v.Disabled == nil {
 					v.Disabled = []string{}
@@ -701,7 +705,7 @@ func panelAPI(subsPath string, extra []string, def sub.Config, ring *logRing, ap
 			}
 			honor := in.Honor
 			nf := subsFile{Disabled: in.Disabled, URLs: urls, Links: f.Links, Mode: in.Mode,
-				Refresh: strings.TrimSpace(in.Refresh), Recheck: strings.TrimSpace(in.Recheck), TestURL: strings.TrimSpace(in.TestURL), Honor: &honor}
+				Refresh: strings.TrimSpace(in.Refresh), Recheck: strings.TrimSpace(in.Recheck), TestURL: strings.TrimSpace(in.TestURL), Honor: &honor, Budget: in.Budget}
 			if nf.Disabled == nil {
 				nf.Disabled = []string{}
 			}

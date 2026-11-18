@@ -43,9 +43,12 @@ pre#log{white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,Consol
    <button class="btn" onclick="act('/api/subs/check?refetch=1')">Скачать подписки и проверить</button>
    <button class="btn" id="auto" onclick="act('/api/subs/select?id=')">Вернуть автовыбор</button>
    <label class="ch" style="padding:0"><input type="checkbox" id="onlyAlive"> только живые</label>
+   <label class="ch" style="padding:0"><input type="checkbox" id="onlyWork"> только качающие</label>
    <span class="mut" id="prog"></span></div></div>
- <div class="card scroll"><table><thead><tr><th></th><th>Сервер</th><th>Тип</th><th>Подписка</th><th class="n">TCP</th><th class="n">Задержка</th><th class="n">Скорость</th><th>Состояние</th><th>Проверен</th><th></th></tr></thead><tbody id="nodes"></tbody></table></div>
- <div class="hint">Задержка — настоящий запрос через сервер (как «реальная задержка» в v2rayN). При сбое активного сервера он сразу проверяется ещё 2 раза; ни одного ответа — сервер выпадает, трафик идёт через следующий. Если умер выбранный вручную — включается автовыбор.</div>
+ <div class="card" id="own" hidden></div>
+ <div class="card scroll"><table><thead><tr><th></th><th>Сервер</th><th>Тип</th><th>IP · AS</th><th class="n">TCP</th><th class="n">Задержка</th><th>Загрузка 256 КБ</th><th class="n">3 МБ</th><th>Состояние</th><th>Проверен</th><th></th></tr></thead><tbody id="nodes"></tbody></table></div>
+ <div class="hint">Задержка — короткий запрос через сервер (как «реальная задержка» в v2rayN): сервер <b>отвечает</b>. Загрузка — 256 КБ одним соединением: сервер <b>реально качает</b>. ТСПУ замораживает соединения с сетями многих хостингов после ~16 КБ: такой сервер отвечает, но поток встаёт — статус «заморожен», в автовыборе он последний. <span class="warn">AS❄</span> — сеть в списке замороженных по внешним замерам (freeze-check). При сбое активного сервера он сразу проверяется ещё 2 раза (и загрузка тоже); ни одного нормального ответа — сервер выпадает. Если умер выбранный вручную — включается автовыбор.</div>
+ <div class="card scroll"><h3>История тестов загрузки</h3><table><thead><tr><th>Когда</th><th>Сервер</th><th>IP · AS</th><th>Тест</th><th>Итог</th><th class="n">Пришло</th><th class="n">До остановки</th><th class="n">Скорость</th></tr></thead><tbody id="hist"></tbody></table></div>
 </section>
 <section id="t-subs">
  <div class="card"><h3>Состояние подписок</h3><div class="scroll"><table><thead><tr><th>Подписка</th><th class="n">Серверов</th><th>Протоколы</th><th>Скачана</th><th>Обновление</th><th>Ошибка</th></tr></thead><tbody id="srcs"></tbody></table></div></div>
@@ -67,7 +70,9 @@ pre#log{white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,Consol
    <div>Перекачивать подписки раз в</div><div><input type="text" id="refresh" placeholder="6h"></div>
    <div>Перепроверять живые раз в</div><div><input type="text" id="recheck" placeholder="30m"></div>
    <div>Адрес проверки задержки</div><div><input type="text" id="testurl" placeholder="http://www.gstatic.com/generate_204"></div>
+   <div>Плитка mosaic своего сервера, байт</div><div><input type="text" id="budget" placeholder="14000"></div>
   </div>
+  <div class="hint">Плитка — сколько байт проходит через одно TLS-соединение до своего сервера, прежде чем МАЯК откроет новое (обход «заморозки 16 КБ»). Меньше — надёжнее, больше — быстрее. Для опытов: 8000, 10000, 14000. Пусто — из <code>MAYAK_BUDGET</code> / ссылки (обычно 14000). Применяется сразу.</div>
   <label class="ch" style="margin-top:10px"><input type="checkbox" id="honor"> <span>Слушать подписку: если она просит обновляться чаще (заголовок <code>profile-update-interval</code>), качать так, как она просит, но не чаще раза в 15 минут.</span></label>
   <div class="row" style="margin-top:8px"><button class="btn pri" onclick="save()">Сохранить и применить</button></div>
   <div class="hint" id="eff"></div></div>
@@ -91,37 +96,59 @@ async function logout(){await api('/logout',{method:'POST'}).catch(()=>{});locat
 const dur=s=>s?String(s).replace(/(\d)m0s$/,'$1m').replace(/(\d)h0m$/,'$1h').replace(/^0s$/,'—'):'';
 function ago(t){if(!t||t.startsWith('0001'))return'—';const s=(Date.now()-new Date(t))/1000;if(s<60)return Math.max(0,s|0)+' с назад';if(s<3600)return(s/60|0)+' мин назад';if(s<86400)return(s/3600|0)+' ч назад';return(s/86400|0)+' д назад'}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;history.replaceState(null,'','#'+tab);document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+tab));if(tab==='subs'||tab==='cfg')loadCfg();tick()});
-$('onlyAlive').onchange=()=>render();
+$('onlyAlive').onchange=()=>render();$('onlyWork').onchange=()=>render();
+const ST={working:['ok','качает'],slow:['warn','медленно'],frozen:['bad','заморожен'],reachable:['mut','отвечает'],dead:['bad','мёртв']};
+const kb=b=>b>=1048576?(b/1048576).toFixed(1)+' МБ':b>=1024?Math.round(b/1024)+' КБ':(b||0)+' Б';
+function asCell(x){if(!x.ip)return'<span class="mut">—</span>';const t=x.asn?`AS${x.asn} ${esc(x.as_name||'')} ${esc(x.as_cc||'')}`:'';
+ return `<span title="${esc(t)}">${esc(x.ip)}${x.asn?` · AS${x.asn}`:''}${x.as_frozen?` <span class="warn" title="в списке замороженных сетей: ${esc(x.as_frozen_note||'')}">❄</span>`:''}</span>${x.as_name?`<div class="mut nm" style="max-width:170px">${esc(x.as_name)}</div>`:''}`}
+function dlCell(d){if(!d)return'<span class="mut">—</span>';const c=ST[d.class]||['mut',d.class];
+ let t=`<span class="${c[0]}">${c[1]}</span> <span class="mut">${kb(d.bytes)}${d.target>262144?' из '+kb(d.target):''}</span>`;
+ if(d.stalled)t+=d.bytes?`<div class="mut">встал через ${(d.stall_ms/1000).toFixed(1)} с</div>`:`<div class="mut">ни байта за ${((d.total_ms||0)/1000).toFixed(0)} с</div>`;else if(d.mbps)t+=`<div class="mut">${d.mbps.toFixed(1)} Мбит/с</div>`;
+ if(d.err&&!d.stalled)t+=`<div class="err" title="${esc(d.err)}">${esc(d.err)}</div>`;return t}
 function srcName(id){if(id==='свои')return'свои серверы';const s=(snap?.pool?.sources||[]).find(x=>x.id===id);return s?(s.preset?s.name:s.url):id}
 function render(){if(!snap)return;const p=snap.pool,a=p.active,mm={off:'выкл',reserve:'резерв',always:'только подписки'};
- $('sum').innerHTML=[['Режим',mm[snap.mode]||snap.mode],['Сейчас трафик через',snap.via==='subs'?'подписку':snap.via==='mayak'?'свой сервер МАЯК':'—'],['Живых',p.alive+' из '+p.total],
+ $('sum').innerHTML=[['Режим',mm[snap.mode]||snap.mode],['Сейчас трафик через',snap.via==='subs'?'подписку':snap.via==='mayak'?'свой сервер МАЯК':'—'],['Живых',p.alive+' из '+p.total],['Из них качают 256 КБ',`<span class="ok">${p.working||0}</span> · медленных <span class="warn">${p.slow||0}</span> · заморожено <span class="bad">${p.frozen||0}</span> · без теста ${p.untested||0}`],
  ['Активный',a?esc(a.name||a.host)+' · '+esc(a.proto)+' · '+(a.delay_ms||'?')+' мс':'—'],['Выбор',p.selected?'вручную':'автоматически (лучший по задержке)'],['Последняя проверка',ago(p.last_run)]].map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join('');
  $('prog').textContent=p.checking?('проверка… '+(p.progress||'')):'';$('auto').disabled=!p.selected;
  const n=$('notice');if(p.notice){n.hidden=false;n.textContent='⚠ '+p.notice+' ('+ago(p.notice_at)+')'}else n.hidden=true;
- let list=p.nodes||[];if($('onlyAlive').checked)list=list.filter(x=>x.ok);
- $('nodes').innerHTML=list.map(x=>{const st=x.ok?(x.limited?'<span class="warn">жив, ограничен</span>':'<span class="ok">жив</span>'):(x.checked&&!x.checked.startsWith('0001')?'<span class="bad">мёртв</span>':'<span class="mut">не проверен</span>');
+ let list=p.nodes||[];if($('onlyAlive').checked)list=list.filter(x=>x.ok);if($('onlyWork').checked)list=list.filter(x=>x.status==='working');
+ $('nodes').innerHTML=list.map(x=>{const st=x.ok?(x.limited?'<span class="warn">отвечает, ограничен</span>':'<span class="ok">отвечает</span>'):(x.checked&&!x.checked.startsWith('0001')?'<span class="bad">мёртв</span>':'<span class="mut">не проверен</span>');
   const flags=(x.active?'▶':'')+(x.selected?'✋':'')+(x.pinned?'★':'');const id=encodeURIComponent(x.id);
-  return `<tr class="${x.active?'act':''}"><td>${flags}</td><td class="nm" title="${esc(x.host+':'+x.port)}">${esc(x.name||x.host)}</td><td>${esc(x.proto)}·${esc(x.net)}·${esc(x.sec)}</td><td class="nm">${esc(srcName(x.source))}</td>
-  <td class="n">${x.tcp_ms?x.tcp_ms+' мс':'—'}</td><td class="n">${x.ok?x.delay_ms+' мс':'—'}</td><td class="n">${x.mbps?x.mbps.toFixed(1)+' Мбит/с':'—'}</td>
+  return `<tr class="${x.active?'act':''}"><td>${flags}</td><td class="nm" title="${esc(x.host+':'+x.port)}">${esc(x.name||x.host)}</td><td title="${esc(srcName(x.source))}">${esc(x.proto)}·${esc(x.net)}·${esc(x.sec)}</td><td>${asCell(x)}</td>
+  <td class="n">${x.tcp_ms?x.tcp_ms+' мс':'—'}</td><td class="n">${x.ok?x.delay_ms+' мс':'—'}</td><td>${x.ok?dlCell(x.dl):'—'}</td><td class="n">${x.mbps?x.mbps.toFixed(1)+' Мбит/с':'—'}</td>
   <td>${st}${x.err?`<div class="err" title="${esc(x.err)}">${esc(x.err)}</div>`:''}${x.fails?`<div class="mut">сбоев: ${x.fails}</div>`:''}</td><td class="mut">${ago(x.checked)}</td>
   <td style="white-space:nowrap"><button class="btn sm" onclick="act('/api/subs/select?id=${id}')" ${x.selected?'disabled':''}>Выбрать</button>
   <button class="btn sm" title="закрепить: проверяется всегда и стоит первым" onclick="act('/api/subs/pin?id=${id}&on=${x.pinned?0:1}')">${x.pinned?'☆':'★'}</button>
-  <button class="btn sm" title="замер скорости (до 3 МБ)" onclick="speed('${id}',this)">⚡</button></td></tr>`}).join('')||'<tr><td colspan="10" class="mut">серверов пока нет</td></tr>';
+  <button class="btn sm" title="замер скорости и заморозки: до 3 МБ одним соединением" onclick="speed('${id}',this)">⚡</button></td></tr>`}).join('')||'<tr><td colspan="11" class="mut">серверов пока нет</td></tr>';
  $('srcs').innerHTML=(p.sources||[]).filter(s=>s.enabled).map(s=>`<tr><td class="nm" title="${esc(s.preset?s.url:'')}">${esc(s.preset?s.name:s.url)}</td><td class="n">${s.count||0}${s.bad?` <span class="mut">(+${s.bad} не понял)</span>`:''}</td>
   <td>${esc(Object.entries(s.mix||{}).map(([k,v])=>k+' '+v).join(', '))}</td><td>${ago(s.fetched)}</td><td>раз в ${esc(dur(s.refresh))}${s.update_hours?` <span class="mut">(подписка просит раз в ${s.update_hours} ч)</span>`:''}</td><td class="err" title="${esc(s.err)}">${esc(s.err)}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">нет включённых подписок</td></tr>';
  if(cfg)effText()}
-async function speed(id,b){b.disabled=true;b.textContent='…';try{const r=await api('/api/subs/speed?id='+id,{method:'POST'});const j=await r.json();msg(j.ok?('скорость '+j.mbps.toFixed(1)+' Мбит/с'):('не вышло: '+(j.err||'')),j.ok)}catch(e){msg(String(e.message||e))}b.disabled=false;b.textContent='⚡';tick()}
+async function speed(id,b){b.disabled=true;b.textContent='…';try{const r=await api('/api/subs/speed?id='+id,{method:'POST'});const j=await r.json();const d=j.dl||{};msg(j.ok?(`${(ST[d.class]||['',''])[1]}: ${kb(d.bytes)}, ${j.mbps.toFixed(1)} Мбит/с`+(d.stalled?`, встал через ${(d.stall_ms/1000).toFixed(1)} с`:'')):('не вышло: '+(j.err||'')),j.ok&&d.class!=='frozen')}catch(e){msg(String(e.message||e))}b.disabled=false;b.textContent='⚡';tick()}
+let tickN=0;
 async function tick(){try{if(tab==='nodes'||tab==='subs'){const r=await api('/api/subs?all=1');if(r.ok){snap=await r.json();render()}}
+ if(tab==='nodes'&&(tickN++%3===0)){api('/api/own').then(r=>r.json()).then(renderOwn).catch(()=>{});api('/api/subs/history?n=40').then(r=>r.json()).then(renderHist).catch(()=>{})}
  if(tab==='log'&&$('follow').checked){const r=await api('/api/log?n=500');if(r.ok){const j=await r.json();const l=$('log');const bottom=l.scrollTop+l.clientHeight>=l.scrollHeight-20;l.textContent=(j.lines||[]).join('\n');if(bottom)l.scrollTop=l.scrollHeight}}}catch(e){}}
+function renderOwn(o){const el=$('own');if(!o||!o.present){el.hidden=true;return}el.hidden=false;const pr=o.probe,a=o.as||{};
+ let st='<span class="mut">ещё не проверялся</span>';if(pr){st=pr.frozen?`<span class="bad">заморожен</span> — встал на ${kb(pr.body)} (${kb(pr.bytes)} по TCP)`:pr.err?`<span class="bad">не отвечает</span>: ${esc(pr.err)}`:`<span class="ok">качает</span> — ${kb(pr.body)}${pr.mbps?', '+pr.mbps.toFixed(1)+' Мбит/с':''}`;st+=` <span class="mut">(${ago(pr.at)})</span>`}
+ el.innerHTML=`<h3>Свой сервер МАЯК <span class="mut" style="font-weight:400">— проверяется отдельно от подписок</span></h3><div class="kv"><div>Адрес</div><div>${esc(o.ip||'—')}${a.asn?` · AS${a.asn} ${esc(a.as_name||'')} ${esc(a.as_cc||'')}`:''}${a.as_frozen?' <span class="warn">❄ сеть в списке замороженных</span>':''}</div>
+ <div>Доступность</div><div>${o.health==='ok'?'<span class="ok">TLS отвечает</span>':o.health==='down'?'<span class="bad">не отвечает — работает резерв</span>':'—'}</div>
+ <div>Проба 256 КБ одним соединением</div><div>${st}</div><div>Режим туннеля</div><div>${esc(o.profile)}${o.profile==='mosaic'?' · плитка '+o.tile+' байт':''} <span class="mut">(по умолчанию ${o.budget})</span></div></div>
+ <div class="row" style="margin-top:8px"><button class="btn sm" onclick="ownProbe(this)">Проверить свой сервер</button></div>`}
+async function ownProbe(b){b.disabled=true;b.textContent='проверяю… (до 40 с)';try{const r=await api('/api/own/probe',{method:'POST'});const j=await r.json();const p=j.probe||{};
+ msg(p.frozen?`заморожен: встал на ${kb(p.body)}`:p.err?('не вышло: '+p.err):`качает: ${kb(p.body)}`,!p.frozen&&!p.err)}catch(e){msg(String(e.message||e))}
+ api('/api/own').then(r=>r.json()).then(renderOwn).catch(()=>{});api('/api/subs/history?n=40').then(r=>r.json()).then(renderHist).catch(()=>{})}
+function renderHist(j){const h=(j&&j.history)||[];const K={auto:'256 КБ',button:'3 МБ',own:'свой'};
+ $('hist').innerHTML=h.map(e=>{const c=ST[e.class]||['mut',e.class];return `<tr><td class="mut">${ago(e.at)}</td><td class="nm">${esc(e.name||e.node)}</td><td>${esc(e.ip||'')}${e.asn?' · AS'+e.asn:''}</td><td>${K[e.kind]||esc(e.kind)}</td>
+ <td><span class="${c[0]}">${c[1]}</span></td><td class="n">${kb(e.bytes)}</td><td class="n">${e.stalled?(e.stall_ms/1000).toFixed(1)+' с':'—'}</td><td class="n">${e.mbps?e.mbps.toFixed(1)+' Мбит/с':'—'}</td></tr>`}).join('')||'<tr><td colspan="8" class="mut">тестов пока не было</td></tr>'}
 function effText(){const d=cfg.defaults||{};const s=snap?.pool?.config;$('eff').textContent='Сейчас: подписки раз в '+dur(s?.refresh||d.refresh)+(s?.honor_update_interval?' (или чаще, если просит подписка)':'')+', живые раз в '+dur(s?.recheck||d.recheck)+', проверка через '+(s?.test_url||d.test_url)}
 async function loadCfg(){try{const r=await api('/api/subs/config');cfg=await r.json();$('urls').value=(cfg.urls||[]).join('\n');$('links').value=cfg.links||'';$('mode').value=cfg.mode||'';
  const off=new Set(cfg.disabled||[]);$('presets').innerHTML=(cfg.presets||[]).map(p=>`<label class="ch"><input type="checkbox" data-id="${esc(p.id)}" ${off.has(p.id)?'':'checked'}> <span>${esc(p.name)}</span></label>`).join('');
- $('refresh').value=cfg.refresh||'';$('recheck').value=cfg.recheck||'';$('testurl').value=cfg.test_url||'';$('honor').checked=!!cfg.honor_update_interval;
+ $('refresh').value=cfg.refresh||'';$('recheck').value=cfg.recheck||'';$('testurl').value=cfg.test_url||'';$('budget').value=cfg.budget||'';$('honor').checked=!!cfg.honor_update_interval;
  const d=cfg.defaults||{};$('refresh').placeholder=dur(d.refresh)+' (по умолчанию)';$('recheck').placeholder=dur(d.recheck)+' (по умолчанию)';$('testurl').placeholder=d.test_url||'';
  $('path').textContent=cfg.path?('файл: '+cfg.path+(cfg.writable?'':' — только чтение!')+(cfg.extra_env?` · ещё ${cfg.extra_env} подписок задано переменной MAYAK_SUB`:'')):'файл настроек не задан (-sub-file) — сохранить нельзя';effText()}catch(e){msg(String(e.message||e))}}
 async function save(){if(!cfg)return;const body={urls:$('urls').value.split('\n').map(s=>s.trim()).filter(Boolean),links:$('links').value,
  disabled:[...document.querySelectorAll('#presets input')].filter(i=>!i.checked).map(i=>i.dataset.id),mode:$('mode').value,
- refresh:$('refresh').value.trim(),recheck:$('recheck').value.trim(),test_url:$('testurl').value.trim(),honor_update_interval:$('honor').checked};
+ refresh:$('refresh').value.trim(),recheck:$('recheck').value.trim(),test_url:$('testurl').value.trim(),honor_update_interval:$('honor').checked,budget:parseInt($('budget').value.trim()||'0',10)||0};
  try{const r=await api('/api/subs/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));
  if(r.ok&&j.ok){msg('сохранено, подписки перечитаны — идёт проверка',true);loadCfg();setTimeout(tick,500)}else msg(j.err||('ошибка '+r.status))}catch(e){msg(String(e.message||e))}}
 function copyLog(){navigator.clipboard?.writeText($('log').textContent).then(()=>msg('скопировано',true),()=>msg('не удалось скопировать'))}

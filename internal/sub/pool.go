@@ -21,6 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"mayak/internal/asn"
 )
 
 // Options — настройки пула.
@@ -39,6 +41,7 @@ type Options struct {
 	ProbeTimeout  time.Duration // 6 с
 	TestURL       string
 	OpenURL       string        // "-" = не проверять
+	FreezeURL     string        // тест «заморозки»: откуда качать ({bytes} — размер), "-" = не проверять
 	Refresh       time.Duration // перекачивать подписки (6 ч)
 	Recheck       time.Duration // перепроверять живых (30 мин)
 	HonorInterval bool          // слушать заголовок подписки profile-update-interval (не чаще MinRefresh)
@@ -57,6 +60,11 @@ type Result struct {
 	Fails   int       `json:"fails"`
 	Speed   float64   `json:"mbps,omitempty"`
 	Limited bool      `json:"limited,omitempty"` // жив, но заблокированное в РФ через него не открывается
+	// 0.3.5: «отвечает» и «реально качает» — разные вещи.
+	Status string `json:"status,omitempty"` // dead | reachable | working | slow | frozen
+	DL     *DL    `json:"dl,omitempty"`     // последний тест загрузки (256 КБ или 3 МБ по кнопке)
+	IP     string `json:"ip,omitempty"`     // фактический адрес сервера при проверке
+	asn.Info
 }
 
 type sourceState struct {
@@ -100,6 +108,9 @@ type Pool struct {
 	notice    string                   // заметка для панели (сброс ручного выбора и т. п.)
 	noticeAt  time.Time
 	probeFn   func(ctx context.Context, n *Node, testURL string, timeout time.Duration) (time.Duration, error)
+	dlFn      func(ctx context.Context, n *Node, target int64) DL // тесты: вместо загрузки через ядро
+	hist      []HistEntry                                         // история тестов загрузки
+	histDirty bool
 }
 
 type persisted struct {
@@ -140,6 +151,9 @@ func New(opt Options) *Pool {
 	}
 	if opt.OpenURL == "" {
 		opt.OpenURL = DefaultOpenURL
+	}
+	if opt.FreezeURL == "" {
+		opt.FreezeURL = DefaultFreezeURL
 	}
 	if opt.Refresh <= 0 {
 		opt.Refresh = 6 * time.Hour
@@ -256,6 +270,9 @@ func (p *Pool) load() {
 		p.res = st.Results
 	}
 	p.alive = st.Alive
+	if b, err := os.ReadFile(p.path("freeze-history.json")); err == nil {
+		_ = json.Unmarshal(b, &p.hist)
+	}
 	for id, h := range st.Intervals {
 		if h > 0 {
 			p.ivl[id] = time.Duration(h * float64(time.Hour))
@@ -284,6 +301,44 @@ func (p *Pool) saveLocked() {
 	_ = os.MkdirAll(p.opt.StateDir, 0o700)
 	_ = os.WriteFile(f+".tmp", b, 0o600)
 	_ = os.Rename(f+".tmp", f)
+	if p.histDirty {
+		h := p.path("freeze-history.json")
+		b, _ := json.Marshal(p.hist)
+		_ = os.WriteFile(h+".tmp", b, 0o600)
+		_ = os.Rename(h+".tmp", h)
+		p.histDirty = false
+	}
+}
+
+// addHistLocked — запись в историю тестов загрузки (последние histMax).
+func (p *Pool) addHistLocked(e HistEntry) {
+	p.hist = append(p.hist, e)
+	if len(p.hist) > histMax {
+		p.hist = append([]HistEntry{}, p.hist[len(p.hist)-histMax:]...)
+	}
+	p.histDirty = true
+}
+
+// AddHistory — запись снаружи (проба своего сервера МАЯК).
+func (p *Pool) AddHistory(e HistEntry) {
+	p.mu.Lock()
+	p.addHistLocked(e)
+	p.saveLocked()
+	p.mu.Unlock()
+}
+
+// History — последние n записей, новые первыми.
+func (p *Pool) History(n int) []HistEntry {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n <= 0 || n > len(p.hist) {
+		n = len(p.hist)
+	}
+	out := make([]HistEntry, 0, n)
+	for i := len(p.hist) - 1; i >= 0 && len(out) < n; i-- {
+		out = append(out, p.hist[i])
+	}
+	return out
 }
 
 // fetchOne — скачать подписку (или взять кэш, если свежий/сеть недоступна).
@@ -467,7 +522,8 @@ func (p *Pool) candidates(max int) []*Node {
 			continue
 		}
 		// недавно мёртвые не трогаем 2 часа
-		if r := p.res[id]; r != nil && !r.OK && time.Since(r.Checked) < 2*time.Hour {
+		// («не дошла очередь» — не проверен, это не «мёртв»)
+		if r := p.res[id]; r != nil && !r.OK && r.Err != errQueue && time.Since(r.Checked) < 2*time.Hour {
 			continue
 		}
 		if _, ok := bySrc[n.Source]; !ok {
@@ -553,17 +609,27 @@ func pinCert(ctx context.Context, ob map[string]any, addr string) error {
 	return nil
 }
 
-// probeNode — задержка + проверка «открывает ли заблокированное».
-// extra — сколько раз переспросить сервер, если первый запрос не прошёл
-// (для тех, кто был живым: правило «сбой → ещё 2 проверки вне очереди»).
-func (p *Pool) probeNode(ctx context.Context, n *Node, r *Result, extra int) {
+// probeNode — задержка + проверка «открывает ли заблокированное» + (если
+// freeze) тест загрузки 256 КБ. extra — сколько раз переспросить сервер, если
+// первый запрос не прошёл (для тех, кто был живым: правило «сбой → ещё 2
+// проверки вне очереди»); то же правило — для теста загрузки: работавший
+// сервер понижается, только если и 2 повторные загрузки встали.
+func (p *Pool) probeNode(ctx context.Context, n *Node, r *Result, extra int, freeze bool) {
 	cfg := p.Config()
+	if ip := p.resolve(ctx, n.Host); ip != "" {
+		r.IP = ip
+		r.Info = asn.LookupString(ip)
+	}
+	defer func() { r.Status = statusOf(r) }()
 	if p.probeFn != nil {
 		var err error
 		for i := 0; i <= extra; i++ {
 			var d time.Duration
 			if d, err = p.probeFn(ctx, n, cfg.TestURL, p.opt.ProbeTimeout); err == nil {
 				r.OK, r.Delay, r.Err = true, max(1, ms(d)), ""
+				if freeze && p.dlFn != nil {
+					p.freezeTest(ctx, n, r, extra, func(ctx context.Context, target int64) DL { return p.dlFn(ctx, n, target) })
+				}
 				return
 			}
 		}
@@ -584,12 +650,31 @@ func (p *Pool) probeNode(ctx context.Context, n *Node, r *Result, extra int) {
 				_, e2 := probe(ctx, e, p.opt.OpenURL, p.opt.ProbeTimeout)
 				r.Limited = e2 != nil
 			}
+			if freeze && p.opt.FreezeURL != "-" {
+				p.freezeTest(ctx, n, r, extra, func(ctx context.Context, target int64) DL {
+					fw := firstWait(time.Duration(r.Delay) * time.Millisecond)
+					return dlTest(ctx, e.Dial, freezeURL(p.opt.FreezeURL, target), target, stallTimeout, fw, fw+15*time.Second)
+				})
+			}
 		}
 		_ = e.Close()
 	}
 	if err != nil {
 		r.Err = shortErr(err)
 	}
+}
+
+// freezeTest — загрузка 256 КБ; если не «работает», а сервер был рабочим
+// (extra > 0), — ещё до extra попыток, берётся лучший результат.
+func (p *Pool) freezeTest(ctx context.Context, n *Node, r *Result, extra int, run func(ctx context.Context, target int64) DL) {
+	d := run(ctx, FreezeSmall)
+	for i := 0; i < extra && d.Class != StatusWorking && ctx.Err() == nil; i++ {
+		d = better(d, run(ctx, FreezeSmall))
+	}
+	r.DL = &d
+	p.mu.Lock()
+	p.addHistLocked(HistEntry{DL: d, Node: n.ID, Name: n.Name, IP: r.IP, ASN: r.ASN, Kind: "auto"})
+	p.mu.Unlock()
 }
 
 // Check — полный прогон: TCP-пинг выборки, затем реальная задержка через ядро.
@@ -652,7 +737,7 @@ func (p *Pool) Check(ctx context.Context, refetch bool) error {
 	if len(ok) > p.opt.ProbeMax {
 		for _, r := range ok[p.opt.ProbeMax:] {
 			p.mu.Lock()
-			p.res[r.n.ID] = &Result{ID: r.n.ID, TCP: ms(r.tcp), Err: "не дошла очередь", Checked: now}
+			p.res[r.n.ID] = &Result{ID: r.n.ID, TCP: ms(r.tcp), Err: errQueue, Checked: now}
 			p.mu.Unlock()
 		}
 		ok = ok[:p.opt.ProbeMax]
@@ -664,7 +749,7 @@ func (p *Pool) Check(ctx context.Context, refetch bool) error {
 		if n.UDPOnly() {
 			r.TCP = 0
 		}
-		p.probeNode(ctx, n, r, p.retries(n.ID))
+		p.probeNode(ctx, n, r, p.retries(n.ID), true)
 		p.mu.Lock()
 		if old := p.res[n.ID]; old != nil {
 			r.Speed = old.Speed
@@ -676,16 +761,22 @@ func (p *Pool) Check(ctx context.Context, refetch bool) error {
 	p.rankLocked()
 	p.lastRun, p.lastFull = time.Now(), time.Now()
 	n, full, total := len(p.alive), 0, len(p.nodes)
+	cnt := map[string]int{}
 	for _, id := range p.alive {
 		if !p.res[id].Limited {
 			full++
 		}
+		cnt[p.res[id].Status]++
 	}
 	p.saveLocked()
 	p.mu.Unlock()
 	p.progress.Store("")
 	p.opt.Logf("подписки: проверено %d из %d, TCP отвечают %d, через ядро %d, живых %d (без ограничений %d) за %s",
 		len(cands), total, tcpN, len(ok), n, full, time.Since(t0).Round(time.Second))
+	if p.opt.FreezeURL != "-" {
+		p.opt.Logf("подписки: тест загрузки 256 КБ — качают %d, медленные %d, заморожены %d, не проверено %d",
+			cnt[StatusWorking], cnt[StatusSlow], cnt[StatusFrozen], cnt[StatusReachable])
+	}
 	return nil
 }
 
@@ -710,10 +801,14 @@ func (p *Pool) Recheck(ctx context.Context) {
 		n := p.nodes[ids[i]]
 		p.mu.Unlock()
 		r := &Result{ID: n.ID, Checked: time.Now()}
-		p.probeNode(ctx, n, r, p.retries(n.ID))
+		p.probeNode(ctx, n, r, p.retries(n.ID), p.freezeDue(n.ID))
 		p.mu.Lock()
 		if old := p.res[n.ID]; old != nil {
 			r.TCP, r.Speed = old.TCP, old.Speed
+			if r.DL == nil && r.OK {
+				r.DL = old.DL // загрузку в этот раз не проверяли — прежний итог
+				r.Status = statusOf(r)
+			}
 			if !r.OK {
 				r.Fails = old.Fails + 1
 				if old.OK {
@@ -757,8 +852,8 @@ func (p *Pool) rankLocked() {
 		if p.pinned[a] != p.pinned[b] {
 			return p.pinned[a]
 		}
-		if p.res[a].Limited != p.res[b].Limited {
-			return !p.res[a].Limited
+		if ka, kb := rankClass(p.res[a]), rankClass(p.res[b]); ka != kb {
+			return ka < kb
 		}
 		return p.res[a].Delay < p.res[b].Delay
 	})
@@ -766,6 +861,13 @@ func (p *Pool) rankLocked() {
 		alive = alive[:p.opt.Keep*3]
 	}
 	p.alive = alive
+	// активный заморожен, а есть рабочий — автовыбор уходит на рабочий
+	if a := p.active; a != "" && p.selected == "" && len(alive) > 0 && a != alive[0] {
+		if r := p.res[a]; r != nil && rankClass(r) > rankClass(p.res[alive[0]]) && r.Status == StatusFrozen {
+			p.opt.Logf("подписки: активный сервер %s заморожен (поток встаёт раньше 64 КБ) — перехожу на %s", p.label(a), p.label(alive[0]))
+			p.active = ""
+		}
+	}
 	if id := p.selected; id != "" {
 		if r := p.res[id]; p.nodes[id] != nil && r != nil && !r.OK && !r.Checked.IsZero() {
 			p.dropSelectedLocked(fmt.Sprintf("выбранный вручную сервер %s не отвечает (%s)", p.label(id), r.Err))
@@ -797,3 +899,42 @@ func shortErr(err error) string {
 	}
 	return s
 }
+
+// rankClass — порядок в автовыборе: качает → не проверен загрузкой →
+// медленный → «ограничен» (не открывает заблокированное) → заморожен.
+func rankClass(r *Result) int {
+	switch {
+	case r.Status == StatusFrozen:
+		return 4
+	case r.Limited:
+		return 3
+	case r.Status == StatusSlow:
+		return 2
+	case r.Status == StatusWorking:
+		return 0
+	}
+	return 1
+}
+
+// freezeDue — проверять ли загрузку при лёгкой перепроверке: активный,
+// выбранный, закреплённые и первые три живых — всегда, остальные — раз в 2 ч.
+func (p *Pool) freezeDue(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if id == p.active || id == p.selected || p.pinned[id] {
+		return true
+	}
+	for i, a := range p.alive {
+		if i >= 3 {
+			break
+		}
+		if a == id {
+			return true
+		}
+	}
+	r := p.res[id]
+	return r == nil || r.DL == nil || time.Since(r.DL.At) > 2*time.Hour
+}
+
+// errQueue — сервер ответил на TCP, но до проверки через ядро очередь не дошла.
+const errQueue = "не дошла очередь"

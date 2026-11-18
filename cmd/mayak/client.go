@@ -99,6 +99,7 @@ func runClient(args []string, auto bool) int {
 	subRefresh := fs.Duration("sub-refresh", 6*time.Hour, "как часто перекачивать подписки (не чаще 15m; поле refresh в subs.json важнее)")
 	subRecheck := fs.Duration("sub-recheck", 30*time.Minute, "как часто перепроверять живые серверы (поле recheck в subs.json важнее)")
 	subTestURL := fs.String("sub-test-url", sub.DefaultTestURL, "адрес для проверки «реальной задержки» через сервер (поле test_url)")
+	subFreeze := fs.String("sub-freeze-url", sub.DefaultFreezeURL, "тест «заморозки» узлов подписок: что качать через узел ({bytes} — размер, 256 КБ; «-» = не проверять загрузку)")
 	subHonor := fs.Bool("sub-honor", true, "слушать заголовок подписки profile-update-interval: качать так часто, как она просит, но не чаще 15m (поле honor_update_interval)")
 	uiPass := fs.String("ui-pass", "", "пароль панели (или @файл); без него на адресе не localhost пароль создаётся сам и пишется в файл")
 	uiPassFile := fs.String("ui-pass-file", "", "файл с паролем панели (по умолчанию /etc/mayak/ui.pass, если есть)")
@@ -248,9 +249,18 @@ func runClient(args []string, auto bool) int {
 	if state == "" {
 		state = defaultSubsState()
 	}
-	ch.pool = newPool(state, srcs, links, *subMax, lookup, helper.DialDesync, infof)
+	ch.lookup = lookup
+	ch.pool = newPool(state, *subFreeze, srcs, links, *subMax, lookup, helper.DialDesync, infof)
 	defCfg := sub.Config{Refresh: *subRefresh, Recheck: *subRecheck, TestURL: *subTestURL, HonorInterval: *subHonor}
 	ch.pool.SetConfig(poolConfig(subsCfg, defCfg))
+	if c != nil {
+		ch.defBudget = opt.Budget
+		if ch.defBudget == 0 {
+			ch.defBudget = c.Budget()
+		}
+		ch.applyBudget(subsCfg)
+		c.SetProbeHook(func(r client.FreezeResult) { go ch.recordOwnProbe(r) })
+	}
 	ch.SetMode(*subsMode)
 	if *sysproxy {
 		if restore, err := setSystemProxy(proxyHostPort(pl.Addr())); err != nil {

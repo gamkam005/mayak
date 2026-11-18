@@ -77,12 +77,12 @@ func (c *Client) ServeDashboard(ctx context.Context, ln net.Listener, speedURL s
 		case "fast":
 			c.setProfile(fastProfile, "выбрано вручную")
 		case "mosaic":
-			c.setProfile(mosaicProfile(c.opt.Budget), "выбрано вручную")
+			c.setProfile(mosaicProfile(c.Budget()), "выбрано вручную")
 		case "auto":
 			go func() {
 				r := c.ProbeFreeze(ctx, 256<<10)
 				if r.Frozen {
-					c.setProfile(mosaicProfile(c.opt.Budget), "проба по кнопке: заморозка")
+					c.setProfile(mosaicProfile(c.Budget()), "проба по кнопке: заморозка")
 				} else if r.Err == "" {
 					c.setProfile(fastProfile, "проба по кнопке: заморозки нет")
 				}

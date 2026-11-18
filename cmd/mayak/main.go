@@ -8,7 +8,7 @@ import (
 	"mayak/internal/update"
 )
 
-var version = "0.3.4"
+var version = "0.3.5"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `МАЯК %s — мозаичный туннель
